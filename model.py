@@ -20,36 +20,94 @@ os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
 ###################
 class Model:
 
-        def __init__(self, input_data, target_data, gating, mask, droput_keep_pct, input_droput_keep_pct):
+    def __init__(self, input_data, target_data, gating, mask):
 
-            # Load the input activity, the target data, and the training mask
-            # for this batch of trials
-            self.input_data         = tf.unstack(input_data, axis=1)
-            self.gating             = gating
-            self.target_data        = tf.unstack(target_data, axis=1)
-            self.droput_keep_pct    = droput_keep_pct
-            self.input_droput_keep_pct  = input_droput_keep_pct
-            self.mask               = tf.unstack(mask, axis=0)
+        # Load the input activity, the target data, and the training mask
+        # for this batch of trials
+        self.input_data         = tf.unstack(input_data, axis=1)
+        self.gating             = gating
+        self.target_data        = tf.unstack(target_data, axis=1)
+        self.mask               = tf.unstack(mask, axis=0)
 
-            # Initialize weights and biases
-            self.initialize()
+        # Build the TensorFlow graph
+        self.run_model()
 
-            # Build the TensorFlow graph
-            self.run_model()
-
-            # Train the model
-            self.optimize()
+        # Train the model
+        self.optimize()
 
 
-        def initialize(self):
+    def run_model(self):
 
-            with tf.variable_scope('rnn'):
-                tf.get_variable('W_in', initializer=par['w_in0'], trainable=True)
+        with tf.variable_scope('rnn'):
+            W_in  = tf.get_variable('W_in', initializer=par['w_in0'], trainable=True)
+            W_rnn = tf.get_variable('W_rnn', initializer=par['w_rnn0'], trainable=True)
+            b_rnn = tf.get_variable('b_rnn', initializer=par['b_rnn0'], trainable=True)
+
+        with tf.variable_scope('output'):
+            W_out = tf.get_variable('W_out', initializer=par['w_out0'], trainable=True)
+            b_out = tf.get_variable('b_out', initializer=par['b_out0'], trainable=True)
+
+        if par['EI']:
+            W_rnn_eff = tf.tensordot(tf.nn.relu(W_rnn), tf.constant(par['EI_matrix']), [[2],[0]])
+        else:
+            W_rnn_eff = W_rnn
+
+        self.hidden_state_hist = []
+        self.syn_x_hist = []
+        self.syn_u_hist = []
+        self.y_hat = []
+
+        h = tf.constant(par['h_init'])
+        syn_x = tf.constant(par['syn_x_init'])
+        syn_u = tf.constant(par['syn_u_init'])
+        for x in self.input_data:
+
+            if par['synapse_config'] == 'std_stf':
+                # implement both synaptic short term facilitation and depression
+                syn_x += par['alpha_std']*(1-syn_x) - par['dt_sec']*syn_u*syn_x*h
+                syn_u += par['alpha_stf']*(par['U']-syn_u) + par['dt_sec']*par['U']*(1-syn_u)*h
+                syn_x = tf.minimum(np.float32(1), tf.nn.relu(syn_x))
+                syn_u = tf.minimum(np.float32(1), tf.nn.relu(syn_u))
+                h_post = syn_u*syn_x*h
+
+            elif par['synapse_config'] == 'std':
+                # implement synaptic short term derpression, but no facilitation
+                # we assume that syn_u remains constant at 1
+                syn_x += par['alpha_std']*(1-syn_x) - par['dt_sec']*syn_x*h
+                syn_x = tf.minimum(np.float32(1), tf.nn.relu(syn_x))
+                syn_u = tf.minimum(np.float32(1), tf.nn.relu(syn_u))
+                h_post = syn_x*h
+
+            elif par['synapse_config'] == 'stf':
+                # implement synaptic short term facilitation, but no depression
+                # we assume that syn_x remains constant at 1
+                syn_u += par['alpha_stf']*(par['U']-syn_u) + par['dt_sec']*par['U']*(1-syn_u)*h
+                syn_u = tf.minimum(np.float32(1), tf.nn.relu(syn_u))
+                h_post = syn_u*h
+
+            else:
+                # no synaptic plasticity
+                h_post = h
 
 
-        def run_model(self):
+            # Incident activity
+            inp_act = tf.tensordot(tf.nn.relu(W_in), tf.nn.relu(tf.transpose(x)), [[2],[0]])
+            rec_act = tf.tensordot(W_rnn_eff, h_post, [[2],[0]])
+            total_act = tf.reduce_sum(par['alpha_neuron']*(inp_act + rec_act), axis=1)
 
-            x = self.input_data
+            # Hidden State
+            h = tf.nn.relu(h*(1-par['alpha_neuron']) + total_act + b_rnn) \
+                + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32)
+
+            # Output State
+            y_hat = tf.matmul(W_out,h) + b_out
+
+            # Bookkeeping lists
+            self.hidden_state_hist.append(h)
+            self.syn_x_hist.append(syn_x)
+            self.syn_u_hist.append(syn_u)
+            self.y_hat.append(tf.transpose(y_hat))
+
 
 
     def optimize(self):
@@ -72,7 +130,7 @@ class Model:
 
         self.aux_loss = tf.add_n(aux_losses)
 
-        self.task_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits = self.y, \
+        self.task_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits = self.y_hat, \
             labels = self.target_data, dim=1))
 
         # Gradient of the loss+aux function, in order to both perform training and to compute delta_weights
@@ -90,10 +148,8 @@ class Model:
         self.reset_prev_vars = tf.group(*reset_prev_vars_ops)
         self.reset_adam_op = adam_optimizer.reset_params()
 
-        correct_prediction = tf.equal(tf.argmax(self.y - (1-self.mask)*9999,1), tf.argmax(self.target_data - (1-self.mask)*9999,1))
-        self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-
         self.reset_weights()
+
 
     def reset_weights(self):
 
@@ -104,13 +160,12 @@ class Model:
                 # reset biases to 0
                 reset_weights.append(tf.assign(var, var*0.))
             elif 'W' in var.op.name:
-                # reset weights to uniform randomly distributed
-                layer = int(var.op.name[5])
-                new_weight = tf.random_uniform([par['layer_dims'][layer],par['layer_dims'][layer+1]], \
-                    -1.0/np.sqrt(par['layer_dims'][layer]), 1.0/np.sqrt(par['layer_dims'][layer]))
+                # reset weights to initial-like conditions
+                new_weight = initialize_weight(var.shape, par['connection_prob'])
                 reset_weights.append(tf.assign(var,new_weight))
 
         self.reset_weights = tf.group(*reset_weights)
+
 
     def EWC(self):
 
@@ -120,7 +175,7 @@ class Model:
         opt = tf.train.GradientDescentOptimizer(1)
 
         # model results p(y|x, theta)
-        p_theta = tf.nn.softmax(self.y, dim = 1)
+        p_theta = tf.nn.softmax(self.y_hat, dim = 1)
         # sample label from p(y|x, theta)
         class_ind = tf.multinomial(p_theta, 1)
         class_ind_one_hot = tf.reshape(tf.one_hot(class_ind, par['layer_dims'][-1]), \
@@ -134,6 +189,7 @@ class Model:
                     grad*grad/par['batch_size']/par['EWC_fisher_num_batches']))
 
         self.update_big_omega = tf.group(*fisher_ops)
+
 
     def pathint_stabilization(self, adam_optimizer, previous_weights_mu_minus_1):
         # Zenke method
@@ -168,6 +224,7 @@ class Model:
                 update_small_omega_ops.append(tf.assign_add(small_omega_var[var.op.name], -self.delta_grads[var.op.name]*grad ) )
             self.update_small_omega = tf.group(*update_small_omega_ops) # 1) update small_omega after each train!
 
+
 def main(save_fn, gpu_id = None):
 
     if gpu_id is not None:
@@ -184,29 +241,24 @@ def main(save_fn, gpu_id = None):
     tf.reset_default_graph()
 
     # Create placeholders for the model
-    # input_data, target_data, gating, mask, dropout keep pct hidden layers, dropout keep pct input layers
+    # input_data, target_data, gating, mask
 
-    if par['task'] == 'mnist':
-        x  = tf.placeholder(tf.float32, [par['batch_size'], par['layer_dims'][0]], 'stim')
-    elif par['task'] == 'cifar' or par['task'] == 'imagenet':
-        x  = tf.placeholder(tf.float32, [par['batch_size'], 32, 32, 3], 'stim')
-    y   = tf.placeholder(tf.float32, [par['batch_size'], par['layer_dims'][-1]], 'out')
-    mask   = tf.placeholder(tf.float32, [par['batch_size'], par['layer_dims'][-1]], 'mask')
-    droput_keep_pct = tf.placeholder(tf.float32, [], 'dropout')
-    input_droput_keep_pct = tf.placeholder(tf.float32, [], 'input_dropout')
-    gating = [tf.placeholder(tf.float32, [par['layer_dims'][n+1]], 'gating') for n in range(par['n_layers']-1)]
+    x  = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], par['n_input']], 'stim')
+    y   = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], par['n_output']], 'out')
+    mask   = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], par['n_output']], 'mask')
+    gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
 
-    stim = stimulus.Stimulus()
+    stim = stimulus.MultiStimulus()
     accuracy_full = []
     accuracy_grid = np.zeros((par['n_tasks'], par['n_tasks']))
 
     with tf.Session() as sess:
 
         if gpu_id is None:
-            model = Model(x, y, gating, mask, droput_keep_pct, input_droput_keep_pct)
+            model = Model(x, y, gating, mask)
         else:
             with tf.device("/gpu:0"):
-                model = Model(x, y, gating, mask, droput_keep_pct, input_droput_keep_pct)
+                model = Model(x, y, gating, mask)
         init = tf.global_variables_initializer()
         sess.run(init)
         t_start = time.time()
@@ -215,30 +267,30 @@ def main(save_fn, gpu_id = None):
         for task in range(par['n_tasks']):
 
             # create dictionary of gating signals applied to each hidden layer for this task
-            gating_dict = {k:v for k,v in zip(gating, par['gating'][task])}
 
             for i in range(par['n_train_batches']):
 
                 # make batch of training data
                 name, trial_info = stim.generate_trial(task)
-                #stim_in, y_hat, mk = stim.make_batch(task, test = False)
+                quit('Quit at stimulus generation.')
 
+                # stim_in, y_hat, mk = stim.make_batch(task, test = False)
                 # stim_in = [batch_size, n_input]
                 # y_hat   = [batch_size, n_output]
                 # mask    = [batch_size, n_output]
 
+
                 if par['stabilization'] == 'pathint':
 
                     _, _, loss, AL = sess.run([model.train_op, model.update_small_omega, model.task_loss, model.aux_loss], \
-                        feed_dict = {x:stim_in, y:y_hat, **gating_dict, mask:mk, droput_keep_pct:par['drop_keep_pct'], \
-                        input_droput_keep_pct:par['input_drop_keep_pct']})
+                        feed_dict = {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
 
                 elif par['stabilization'] == 'EWC':
-                    _,loss,AL = sess.run([model.train_op, model.task_loss, model.aux_loss], feed_dict = \
-                        {x:stim_in, y:y_hat, **gating_dict, mask:mk, droput_keep_pct:par['drop_keep_pct'], input_droput_keep_pct:par['input_drop_keep_pct']})
+                    _, loss, AL = sess.run([model.train_op, model.task_loss, model.aux_loss], feed_dict = \
+                        {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
 
-                if i//500 == i/500:
-                    print('Iter: ', i, 'Loss: ', loss, 'Aux Loss: ',  AL)
+                if i%50 == 0:
+                    print('Task: ', name, 'Iter: ', i, 'Loss: ', loss, 'Aux Loss: ',  AL)
 
             # Update big omegaes, and reset other values before starting new task
             if par['stabilization'] == 'pathint':
@@ -247,28 +299,13 @@ def main(save_fn, gpu_id = None):
                 for n in range(par['EWC_fisher_num_batches']):
                     stim_in, y_hat, mk = stim.make_batch(task, test = False)
                     big_omegas = sess.run([model.update_big_omega,model.big_omega_var], feed_dict = \
-                        {x:stim_in, y:y_hat, **gating_dict, mask:mk, droput_keep_pct:1.0, input_droput_keep_pct:1.0})
+                        {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
 
             # Reset the Adam Optimizer, and set the previous parater values to their current values
             sess.run(model.reset_adam_op)
             sess.run(model.reset_prev_vars)
             if par['stabilization'] == 'pathint':
                 sess.run(model.reset_small_omega)
-
-            # Test the netwroks on all trained tasks
-            num_test_reps = 10
-            accuracy = np.zeros((task+1))
-            for test_task in range(task+1):
-                gating_dict = {k:v for k,v in zip(gating, par['gating'][test_task])}
-                for r in range(num_test_reps):
-                    stim_in, y_hat, mk = stim.make_batch(test_task, test = True)
-                    acc = sess.run(model.accuracy, feed_dict={x:stim_in, y:y_hat, \
-                        **gating_dict, mask:mk, droput_keep_pct:1.0, input_droput_keep_pct:1.0})/num_test_reps
-                    accuracy_grid[task, test_task]  += acc
-                    accuracy[test_task] += acc
-
-            print('Task ',task, ' Mean ', np.mean(accuracy), ' First ', accuracy[0], ' Last ', accuracy[-1])
-            accuracy_full.append(np.mean(accuracy))
 
             # reset weights between tasks if called upon
             if par['reset_weights']:
@@ -281,3 +318,5 @@ def main(save_fn, gpu_id = None):
             pickle.dump(save_results, open(par['save_dir'] + save_fn, 'wb'))
 
     print('\nModel execution complete.')
+
+main('testing')
