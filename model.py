@@ -20,80 +20,36 @@ os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
 ###################
 class Model:
 
-    def __init__(self, input_data, target_data, gating, mask, droput_keep_pct, input_droput_keep_pct):
+        def __init__(self, input_data, target_data, gating, mask, droput_keep_pct, input_droput_keep_pct):
 
-        # Load the input activity, the target data, and the training mask
-        # for this batch of trials
-        self.input_data         = input_data
-        self.gating             = gating
-        self.target_data        = target_data
-        self.droput_keep_pct    = droput_keep_pct
-        self.input_droput_keep_pct  = input_droput_keep_pct
-        self.mask               = mask
+            # Load the input activity, the target data, and the training mask
+            # for this batch of trials
+            self.input_data         = tf.unstack(input_data, axis=1)
+            self.gating             = gating
+            self.target_data        = tf.unstack(target_data, axis=1)
+            self.droput_keep_pct    = droput_keep_pct
+            self.input_droput_keep_pct  = input_droput_keep_pct
+            self.mask               = tf.unstack(mask, axis=0)
 
-        # Build the TensorFlow graph
-        self.run_model()
+            # Initialize weights and biases
+            self.initialize()
 
-        # Train the model
-        self.optimize()
+            # Build the TensorFlow graph
+            self.run_model()
 
-
-    def run_model(self):
-
-        if par['task'] == 'cifar' or par['task'] == 'imagenet':
-            self.x = self.apply_convulational_layers()
-
-        elif par['task'] == 'mnist':
-            self.x = tf.nn.dropout(self.input_data, self.input_droput_keep_pct)
-
-        self.apply_dense_layers()
+            # Train the model
+            self.optimize()
 
 
-    def apply_dense_layers(self):
+        def initialize(self):
 
-        for n in range(par['n_layers']-1):
-            with tf.variable_scope('layer'+str(n)):
-
-                W = tf.get_variable('W', initializer = tf.random_uniform([par['layer_dims'][n],par['layer_dims'][n+1]], \
-                    -1.0/np.sqrt(par['layer_dims'][n]), 1.0/np.sqrt(par['layer_dims'][n])), trainable = True)
-                b = tf.get_variable('b', initializer = tf.zeros([1,par['layer_dims'][n+1]]), trainable = True if n<par['n_layers']-2 else False)
-
-                if n < par['n_layers']-2:
-                    self.x = tf.nn.dropout(tf.nn.relu(tf.matmul(self.x,W) + b), self.droput_keep_pct)
-                    self.x = self.x*tf.tile(tf.reshape(self.gating[n],[1,par['layer_dims'][n+1]]),[par['batch_size'],1])
-
-                else:
-                    self.y = tf.matmul(self.x,W) + b  - (1-self.mask)*1e16
+            with tf.variable_scope('rnn'):
+                tf.get_variable('W_in', initializer=par['w_in0'], trainable=True)
 
 
-    def apply_convulational_layers(self):
+        def run_model(self):
 
-        conv_weights = pickle.load(open(par['save_dir'] + par['task'] + '_conv_weights.pkl','rb'))
-        #conv_weights = pickle.load(open(par['save_dir'] + 'cifarconv_weights.pkl','rb'))
-
-        conv1 = tf.layers.conv2d(inputs=self.input_data,filters=32, kernel_size=[3, 3], kernel_initializer = \
-            tf.constant_initializer(conv_weights['conv2d/kernel']),  bias_initializer = tf.constant_initializer(conv_weights['conv2d/bias']), \
-            strides=1, activation=tf.nn.relu, padding = 'SAME', trainable=False)
-
-        conv2 = tf.layers.conv2d(inputs=conv1,filters=32, kernel_size=[3, 3], kernel_initializer = \
-            tf.constant_initializer(conv_weights['conv2d_1/kernel']),  bias_initializer = tf.constant_initializer(conv_weights['conv2d_1/bias']), \
-            strides=1, activation=tf.nn.relu, padding = 'SAME', trainable=False)
-
-        conv2 = tf.layers.max_pooling2d(inputs=conv2, pool_size=[2, 2], strides=2, padding='SAME')
-        conv2 = tf.nn.dropout(conv2, self.input_droput_keep_pct)
-
-        conv3 = tf.layers.conv2d(inputs=conv2,filters=64, kernel_size=[3, 3], kernel_initializer = \
-            tf.constant_initializer(conv_weights['conv2d_2/kernel']),  bias_initializer = tf.constant_initializer(conv_weights['conv2d_2/bias']), \
-            strides=1, activation=tf.nn.relu, padding = 'SAME', trainable=False)
-
-        conv4 = tf.layers.conv2d(inputs=conv3,filters=64, kernel_size=[3, 3], kernel_initializer = \
-            tf.constant_initializer(conv_weights['conv2d_3/kernel']),  bias_initializer = tf.constant_initializer(conv_weights['conv2d_3/bias']), \
-            strides=1, activation=tf.nn.relu, padding = 'SAME', trainable=False)
-
-        conv4 = tf.layers.max_pooling2d(inputs=conv4, pool_size=[2, 2], strides=2, padding='SAME')
-        conv4 = tf.nn.dropout(conv4, self.input_droput_keep_pct)
-
-        return tf.reshape(conv4,[par['batch_size'], -1])
+            x = self.input_data
 
 
     def optimize(self):
@@ -240,7 +196,7 @@ def main(save_fn, gpu_id = None):
     input_droput_keep_pct = tf.placeholder(tf.float32, [], 'input_dropout')
     gating = [tf.placeholder(tf.float32, [par['layer_dims'][n+1]], 'gating') for n in range(par['n_layers']-1)]
 
-    stim = stimulus.Stimulus(labels_per_task = par['labels_per_task'])
+    stim = stimulus.Stimulus()
     accuracy_full = []
     accuracy_grid = np.zeros((par['n_tasks'], par['n_tasks']))
 
@@ -264,7 +220,12 @@ def main(save_fn, gpu_id = None):
             for i in range(par['n_train_batches']):
 
                 # make batch of training data
-                stim_in, y_hat, mk = stim.make_batch(task, test = False)
+                name, trial_info = stim.generate_trial(task)
+                #stim_in, y_hat, mk = stim.make_batch(task, test = False)
+
+                # stim_in = [batch_size, n_input]
+                # y_hat   = [batch_size, n_output]
+                # mask    = [batch_size, n_output]
 
                 if par['stabilization'] == 'pathint':
 
