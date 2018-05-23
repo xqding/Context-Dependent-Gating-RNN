@@ -266,8 +266,6 @@ def main(save_fn, gpu_id = None):
 
         for task in range(par['n_tasks']):
 
-            # create dictionary of gating signals applied to each hidden layer for this task
-
             for i in range(par['n_train_batches']):
 
                 # make batch of training data
