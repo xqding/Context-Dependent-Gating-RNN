@@ -16,7 +16,7 @@ global par
 par = {
     # General parameters
     'save_dir'              : './savedir/',
-    'loss_function'         : 'MSE',     # cross_entropy or MSE
+    'loss_function'         : 'cross_entropy',     # cross_entropy or MSE
     'stabilization'         : 'pathint', # 'EWC' (Kirkpatrick method) or 'pathint' (Zenke method)
     'learning_rate'         : 0.001,
     'save_analysis'         : False,
@@ -55,7 +55,7 @@ par = {
     # Task specs
     'task'                  : 'multistim',
     'n_tasks'               : 20,
-    'multistim_trial_length': 2000,
+    'multistim_trial_length': 4000,
     'mask_duration'         : 200,
     'dead_time'             : 200,
 
@@ -75,8 +75,8 @@ par = {
     'U_std'                 : 0.45,
 
     # Training specs
-    'batch_size'            : 131,
-    'n_train_batches'       : 5000,
+    'batch_size'            : 256,
+    'n_train_batches'       : 1000,
 
     # Omega parameters
     'omega_c'               : 0.1,
