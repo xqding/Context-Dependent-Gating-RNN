@@ -129,7 +129,7 @@ class Model:
 
         self.aux_loss = tf.add_n(aux_losses)
 
-        self.spiking_loss = par['spike_cost']*tf.reduce_mean(tf.square(self.hidden_state_hist))
+        self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.square(self.hidden_state_hist))
 
         if par['loss_function'] == 'cross_entropy':
             self.task_loss = tf.reduce_mean([mask*tf.nn.softmax_cross_entropy_with_logits(logits = y, \
@@ -140,8 +140,8 @@ class Model:
             raise Exception('Invalid loss function identifier.')
 
         # Gradient of the loss+aux function, in order to both perform training and to compute delta_weights
-        with tf.control_dependencies([self.task_loss, self.aux_loss, self.spiking_loss]):
-            grads_and_vars = adam_optimizer.compute_gradients(self.task_loss + self.aux_loss + self.spiking_loss)
+        with tf.control_dependencies([self.task_loss, self.aux_loss, self.spike_loss]):
+            grads_and_vars = adam_optimizer.compute_gradients(self.task_loss + self.aux_loss + self.spike_loss)
 
             for (grad, var) in grads_and_vars:
                 if 'W_rnn' in var.op.name:
@@ -157,7 +157,7 @@ class Model:
             self.train_op = adam_optimizer.apply_gradients(grads_and_vars)
 
         # Determining accuracy
-        """
+
         correct_prediction = [tf.reduce_sum(mask*tf.cast(tf.less(tf.argmax(desired_output,0), par['num_motion_dirs']), tf.float32)*tf.cast(tf.equal(tf.argmax(y_hat,0), tf.argmax(desired_output,0)), tf.float32)) \
             for (y_hat, desired_output, mask) in zip(self.y_hat, self.target_data, self.mask)]
         correct_count = [tf.reduce_sum(mask*tf.cast(tf.less(tf.argmax(desired_output,0),par['num_motion_dirs']),tf.float32)) \
@@ -176,7 +176,7 @@ class Model:
             counts.append(c)
 
         self.accuracy = tf.reduce_sum(tf.reduce_sum(predictions)/tf.reduce_sum(counts))
-
+        """
         # Stabilizing weights
         if par['stabilization'] == 'pathint':
             # Zenke method
@@ -316,7 +316,8 @@ def main(save_fn, gpu_id = None):
                 mk      = np.transpose(trial_info['train_mask'], [1,0])[...,np.newaxis]
 
                 if par['stabilization'] == 'pathint':
-                    _, _, loss, AL, acc, output = sess.run([model.train_op, model.update_small_omega, model.task_loss, model.aux_loss, model.accuracy, model.y_hat], \
+                    _, _, loss, AL, spike_loss, acc, output = sess.run([model.train_op, model.update_small_omega, model.task_loss,\
+                        model.aux_loss, model.spike_loss, model.accuracy, model.y_hat], \
                         feed_dict = {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
 
                 elif par['stabilization'] == 'EWC':
@@ -324,14 +325,13 @@ def main(save_fn, gpu_id = None):
                         {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
 
                 if i%50 == 0:
-                    print('Task:', task, 'Iter:', i, 'Acc:', acc, 'Loss:', loss, 'Aux Loss:',  AL)
+                    print('Task:', task, 'Iter:', i, 'Acc:', acc, 'Task Loss:', loss, 'Aux Loss:',  AL, 'Spike Loss:', spike_loss)
 
 
                     # RUNNING ACCURACY DIAGNOSTICS
                     fig, ax = plt.subplots(1,2)
                     ax[0].imshow(y_hat[0,:,:])
                     ax[1].imshow(np.minimum(np.array(output)[:,0,:], 50))
-                    ax[1].colorbar()
                     plt.show()
 
             # Update big omegaes, and reset other values before starting new task
