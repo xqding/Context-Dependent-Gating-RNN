@@ -156,27 +156,6 @@ class Model:
 
             self.train_op = adam_optimizer.apply_gradients(grads_and_vars)
 
-        # Determining accuracy
-
-        correct_prediction = [tf.reduce_sum(mask*tf.cast(tf.less(tf.argmax(desired_output,0), par['num_motion_dirs']), tf.float32)*tf.cast(tf.equal(tf.argmax(y_hat,0), tf.argmax(desired_output,0)), tf.float32)) \
-            for (y_hat, desired_output, mask) in zip(self.y_hat, self.target_data, self.mask)]
-        correct_count = [tf.reduce_sum(mask*tf.cast(tf.less(tf.argmax(desired_output,0),par['num_motion_dirs']),tf.float32)) \
-            for (desired_output, mask) in zip(self.target_data, self.mask)]
-
-        self.accuracy = tf.reduce_sum(tf.stack(correct_prediction))/tf.reduce_sum(tf.stack(correct_count))
-        """
-        predictions = []
-        counts = []
-        for y_hat, desired_output, mask in zip(self.y_hat, self.target_data, self.mask):
-            p = mask * tf.cast(tf.equal(tf.argmax(desired_output), tf.argmax(y_hat)), tf.float32) \
-              * tf.cast(tf.not_equal(tf.argmax(desired_output), par['num_motion_dirs']), tf.float32)
-            c = mask * tf.cast(tf.not_equal(tf.argmax(desired_output), par['num_motion_dirs']), tf.float32)
-
-            predictions.append(p)
-            counts.append(c)
-
-        self.accuracy = tf.reduce_sum(tf.reduce_sum(predictions)/tf.reduce_sum(counts))
-        """
         # Stabilizing weights
         if par['stabilization'] == 'pathint':
             # Zenke method
@@ -295,13 +274,11 @@ def main(save_fn, gpu_id = None):
 
     with tf.Session() as sess:
 
-        if gpu_id is None:
+        device = '/cpu:0' if gpu_id is None else '/gpu:0'
+        with tf.device(device):
             model = Model(x, y, gating, mask)
-        else:
-            with tf.device("/gpu:0"):
-                model = Model(x, y, gating, mask)
-        init = tf.global_variables_initializer()
-        sess.run(init)
+
+        sess.run(tf.global_variables_initializer())
         t_start = time.time()
         sess.run(model.reset_prev_vars)
 
@@ -316,15 +293,16 @@ def main(save_fn, gpu_id = None):
                 mk      = np.transpose(trial_info['train_mask'], [1,0])[...,np.newaxis]
 
                 if par['stabilization'] == 'pathint':
-                    _, _, loss, AL, spike_loss, acc, output = sess.run([model.train_op, model.update_small_omega, model.task_loss,\
-                        model.aux_loss, model.spike_loss, model.accuracy, model.y_hat], \
+                    _, _, loss, AL, spike_loss, output = sess.run([model.train_op, model.update_small_omega, model.task_loss,\
+                        model.aux_loss, model.spike_loss, model.y_hat], \
                         feed_dict = {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
 
                 elif par['stabilization'] == 'EWC':
-                    _, loss, AL, acc = sess.run([model.train_op, model.task_loss, model.aux_loss, model.accuracy], feed_dict = \
+                    _, loss, AL = sess.run([model.train_op, model.task_loss, model.aux_loss], feed_dict = \
                         {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
 
                 if i%50 == 0:
+                    acc = get_perf(y_hat, output, mk)
                     print('Task:', task, 'Iter:', i, 'Acc:', acc, 'Task Loss:', loss, 'Aux Loss:',  AL, 'Spike Loss:', spike_loss)
 
 
@@ -377,4 +355,21 @@ def main(save_fn, gpu_id = None):
 
     print('\nModel execution complete.')
 
-main('testing')
+def get_perf(target, output, mask):
+
+    """
+    Calculate task accuracy by comparing the actual network output to the desired output
+    only examine time points when test stimulus is on
+    in another words, when target[:,:,-1] is not 0
+    """
+    output = np.stack(output, axis=1)
+    ss =target[:,:,-1]==0
+    print(output.shape, target.shape, mask.shape, ss.shape)
+    mask *= np.reshape(target[:,:,-1] == 0, (par['batch_size'], par['num_time_steps'], 1))
+
+    target = np.argmax(target, axis = 2)
+    output = np.argmax(output, axis = 2)
+
+    return np.sum(np.float32(target == output)*np.squeeze(mask))/np.sum(mask)
+
+#main('testing')
