@@ -25,9 +25,9 @@ class Model:
         # Load the input activity, the target data, and the training mask
         # for this batch of trials
         self.input_data         = tf.unstack(input_data, axis=1)
-        self.gating             = gating
+        self.gating             = tf.reshape(gating, [-1,1])
         self.target_data        = tf.unstack(target_data, axis=1)
-        self.mask               = tf.unstack(mask, axis=0)
+        self.mask               = tf.unstack(mask, axis=1)
 
         # Build the TensorFlow graph
         self.run_model()
@@ -96,7 +96,7 @@ class Model:
             total_act = tf.reduce_sum(par['alpha_neuron']*(inp_act + rec_act), axis=1)
 
             # Hidden State
-            h = tf.nn.relu(h*(1-par['alpha_neuron']) + total_act + b_rnn) \
+            h = self.gating*tf.nn.relu(h*(1-par['alpha_neuron']) + total_act + b_rnn) \
                 + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32)
 
             # Output State
@@ -107,7 +107,6 @@ class Model:
             self.syn_x_hist.append(syn_x)
             self.syn_u_hist.append(syn_u)
             self.y_hat.append(tf.transpose(y_hat))
-
 
 
     def optimize(self):
@@ -130,13 +129,55 @@ class Model:
 
         self.aux_loss = tf.add_n(aux_losses)
 
-        self.task_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits = self.y_hat, \
-            labels = self.target_data, dim=1))
+        self.spiking_loss = par['spike_cost']*tf.reduce_mean(tf.square(self.hidden_state_hist))
+
+        if par['loss_function'] == 'cross_entropy':
+            self.task_loss = tf.reduce_mean([mask*tf.nn.softmax_cross_entropy_with_logits(logits = y, \
+                labels = target, dim=1) for y, target, mask in zip(self.y_hat, self.target_data, self.mask)])
+        elif par['loss_function'] == 'MSE':
+            self.task_loss = tf.reduce_mean([m*tf.square(y-t) for y, t, m in zip(self.y_hat, self.target_data, self.mask)])
+        else:
+            raise Exception('Invalid loss function identifier.')
 
         # Gradient of the loss+aux function, in order to both perform training and to compute delta_weights
-        with tf.control_dependencies([self.task_loss, self.aux_loss]):
-            self.train_op = adam_optimizer.compute_gradients(self.task_loss + self.aux_loss)
+        with tf.control_dependencies([self.task_loss, self.aux_loss, self.spiking_loss]):
+            grads_and_vars = adam_optimizer.compute_gradients(self.task_loss + self.aux_loss + self.spiking_loss)
 
+            for (grad, var) in grads_and_vars:
+                if 'W_rnn' in var.op.name:
+                    print('Applied W_rnn mask.')
+                    grad *= par['w_rnn_mask']
+                elif 'W_in' in var.op.name:
+                    print('Applied W_in mask.')
+                    grad *= par['w_in_mask']
+                elif 'W_out' in var.op.name:
+                    print('Applied W_out mask.')
+                    grad *= par['w_out_mask']
+
+            self.train_op = adam_optimizer.apply_gradients(grads_and_vars)
+
+        # Determining accuracy
+        """
+        correct_prediction = [tf.reduce_sum(mask*tf.cast(tf.less(tf.argmax(desired_output,0), par['num_motion_dirs']), tf.float32)*tf.cast(tf.equal(tf.argmax(y_hat,0), tf.argmax(desired_output,0)), tf.float32)) \
+            for (y_hat, desired_output, mask) in zip(self.y_hat, self.target_data, self.mask)]
+        correct_count = [tf.reduce_sum(mask*tf.cast(tf.less(tf.argmax(desired_output,0),par['num_motion_dirs']),tf.float32)) \
+            for (desired_output, mask) in zip(self.target_data, self.mask)]
+
+        self.accuracy = tf.reduce_sum(tf.stack(correct_prediction))/tf.reduce_sum(tf.stack(correct_count))
+        """
+        predictions = []
+        counts = []
+        for y_hat, desired_output, mask in zip(self.y_hat, self.target_data, self.mask):
+            p = mask * tf.cast(tf.equal(tf.argmax(desired_output), tf.argmax(y_hat)), tf.float32) \
+              * tf.cast(tf.not_equal(tf.argmax(desired_output), par['num_motion_dirs']), tf.float32)
+            c = mask * tf.cast(tf.not_equal(tf.argmax(desired_output), par['num_motion_dirs']), tf.float32)
+
+            predictions.append(p)
+            counts.append(c)
+
+        self.accuracy = tf.reduce_sum(tf.reduce_sum(predictions)/tf.reduce_sum(counts))
+
+        # Stabilizing weights
         if par['stabilization'] == 'pathint':
             # Zenke method
             self.pathint_stabilization(adam_optimizer, previous_weights_mu_minus_1)
@@ -245,7 +286,7 @@ def main(save_fn, gpu_id = None):
 
     x  = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], par['n_input']], 'stim')
     y   = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], par['n_output']], 'out')
-    mask   = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], par['n_output']], 'mask')
+    mask   = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], 1], 'mask')
     gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
 
     stim = stimulus.MultiStimulus()
@@ -270,25 +311,28 @@ def main(save_fn, gpu_id = None):
 
                 # make batch of training data
                 name, trial_info = stim.generate_trial(task)
-                quit('Quit at stimulus generation.')
-
-                # stim_in, y_hat, mk = stim.make_batch(task, test = False)
-                # stim_in = [batch_size, n_input]
-                # y_hat   = [batch_size, n_output]
-                # mask    = [batch_size, n_output]
-
+                stim_in = np.transpose(trial_info['neural_input'], [2,1,0])
+                y_hat   = np.transpose(trial_info['desired_output'], [2,1,0])
+                mk      = np.transpose(trial_info['train_mask'], [1,0])[...,np.newaxis]
 
                 if par['stabilization'] == 'pathint':
-
-                    _, _, loss, AL = sess.run([model.train_op, model.update_small_omega, model.task_loss, model.aux_loss], \
+                    _, _, loss, AL, acc, output = sess.run([model.train_op, model.update_small_omega, model.task_loss, model.aux_loss, model.accuracy, model.y_hat], \
                         feed_dict = {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
 
                 elif par['stabilization'] == 'EWC':
-                    _, loss, AL = sess.run([model.train_op, model.task_loss, model.aux_loss], feed_dict = \
+                    _, loss, AL, acc = sess.run([model.train_op, model.task_loss, model.aux_loss, model.accuracy], feed_dict = \
                         {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
 
                 if i%50 == 0:
-                    print('Task: ', name, 'Iter: ', i, 'Loss: ', loss, 'Aux Loss: ',  AL)
+                    print('Task:', task, 'Iter:', i, 'Acc:', acc, 'Loss:', loss, 'Aux Loss:',  AL)
+
+
+                    # RUNNING ACCURACY DIAGNOSTICS
+                    fig, ax = plt.subplots(1,2)
+                    ax[0].imshow(y_hat[0,:,:])
+                    ax[1].imshow(np.minimum(np.array(output)[:,0,:], 50))
+                    ax[1].colorbar()
+                    plt.show()
 
             # Update big omegaes, and reset other values before starting new task
             if par['stabilization'] == 'pathint':
@@ -308,6 +352,22 @@ def main(save_fn, gpu_id = None):
             # reset weights between tasks if called upon
             if par['reset_weights']:
                 sess.run(model.reset_weights)
+
+            # Test all tasks at the end of each learning session
+            for task_prime in range(task+1):
+
+                # make batch of training data
+                name, trial_info = stim.generate_trial(task_prime)
+                stim_in = np.transpose(trial_info['neural_input'], [2,1,0])
+                y_hat   = np.transpose(trial_info['desired_output'], [2,1,0])
+                mk      = np.transpose(trial_info['train_mask'], [1,0])[...,np.newaxis]
+
+                acc = sess.run(model.accuracy, feed_dict={x:stim_in, y:y_hat, gating:par['gating'][task_prime], mask:mk})
+                accuracy_grid[task,task_prime] = acc
+
+            print('Accuracy grid after task {}:'.format(task))
+            print(np.round(accuracy_grid,2))
+            print('')
 
 
         if par['save_analysis']:
