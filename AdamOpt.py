@@ -46,6 +46,14 @@ class AdamOpt:
         return tf.group(*reset_op)
 
 
+    def optimize(self, loss):
+
+        grads_and_vars = self.compute_gradients(loss)
+        train_op = self.apply_gradients(grads_and_vars)
+
+        return train_op
+
+
     def compute_gradients(self, loss, apply = True):
 
         self.gradients = self.grad_descent.compute_gradients(loss, var_list = self.variables)
@@ -54,6 +62,7 @@ class AdamOpt:
         lr = self.learning_rate*np.sqrt(1-self.beta2**self.t)/(1-self.beta1**self.t)
         self.update_var_op = []
 
+        grads_and_vars = []
         for (grads, _), var in zip(self.gradients, self.variables):
             new_m = self.beta1*self.m[var.op.name] + (1-self.beta1)*grads
             new_v = self.beta2*self.v[var.op.name] + (1-self.beta2)*grads*grads
@@ -65,8 +74,16 @@ class AdamOpt:
             self.update_var_op.append(tf.assign(self.v[var.op.name], new_v))
             #self.update_var_op.append(tf.assign(self.delta_grads[var.op.name], delta_grad))
             self.update_var_op.append(tf.assign(self.delta_grads[var.op.name], delta_grad))
-            if apply:
-                self.update_var_op.append(tf.assign_add(var, delta_grad))
+
+            grads_and_vars.append([delta_grad, var])
+
+        return grads_and_vars
+
+
+    def apply_gradients(self, grads_and_vars):
+
+        for (grad, var) in grads_and_vars:
+            self.update_var_op.append(tf.assign_add(var, grad))
 
         return tf.group(*self.update_var_op)
 
