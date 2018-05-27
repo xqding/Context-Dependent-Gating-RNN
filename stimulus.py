@@ -9,11 +9,12 @@ class MultiStimulus:
     def __init__(self):
 
         # Shape configuration
-        self.input_shape    = [par['n_input'], par['num_time_steps'], par['batch_size']]
-        self.output_shape   = [par['n_output'], par['num_time_steps'], par['batch_size']]
-        self.stimulus_shape = [par['num_motion_tuned'], par['num_time_steps'], par['batch_size']]
-        self.response_shape = [par['num_motion_dirs'], par['num_time_steps'], par['batch_size']]
-        self.fixation_shape = [par['num_fix_tuned'], par['num_time_steps'], par['batch_size']]
+        self.input_shape    = [par['num_time_steps'], par['batch_size'],par['n_input'] ]
+        self.output_shape   = [par['num_time_steps'], par['batch_size'],par['n_output'] ]
+        self.stimulus_shape = [par['num_time_steps'], par['batch_size'],par['num_motion_tuned'] ]
+        self.response_shape = [par['num_time_steps'], par['batch_size'],par['num_motion_dirs'] ]
+        self.fixation_shape = [par['num_time_steps'], par['batch_size'],par['num_fix_tuned'] ]
+        self.rule_shape = [par['num_time_steps'], par['batch_size'],par['num_rule_tuned'] ]
         self.mask_shape     = [par['num_time_steps'], par['batch_size']]
 
         # Motion and stimulus configuration
@@ -104,10 +105,15 @@ class MultiStimulus:
             'train_mask'     : np.ones(self.mask_shape, dtype=np.float32)}
 
         self.trial_info['train_mask'][:par['dead_time']//par['dt'], :] = 0
+        rule_signal = np.zeros((1,1,par['num_rule_tuned']))
+        rule_signal[0,0,current_task] = 1
+        if par['num_rule_tuned'] > 0:
+            self.trial_info['neural_input'][:, :, -par['num_rule_tuned']:] += rule_signal
 
         task = self.task_types[current_task]    # Selects a task from the list
         task[0](*task[1:])                      # Generates that task into trial_info
-        return task[1], self.trial_info         # Returns the trial info and the task name
+        # Returns the trial info and the task name
+        return task[1], self.trial_info['neural_input'], self.trial_info['desired_output'], self.trial_info['train_mask']
 
 
     def task_go(self, variant='go', offset=0):
@@ -126,7 +132,7 @@ class MultiStimulus:
         elif variant == 'dly_go':
             stim_onset = 500//par['dt']*np.ones(par['batch_size'],dtype=np.int8)
             stim_off = 750//par['dt']
-            fixation_end = stim_off + np.random.choice([200,400,800,1600], size=par['batch_size'])//par['dt']
+            fixation_end = stim_off + np.random.choice([100,200,400,800], size=par['batch_size'])//par['dt']
             resp_onset = fixation_end
         else:
             raise Exception('Bad task variant.')
@@ -134,22 +140,28 @@ class MultiStimulus:
         # Need dead time
         self.trial_info['train_mask'][:par['mask_duration']//par['dt'], :] = 0
 
-        fix_resp = np.tile(par['tuning_height'], (par['num_fix_tuned'],1))
         for b in range(par['batch_size']):
 
             # Input neurons index above par['num_motion_tuned'] encode fixation
-            self.trial_info['neural_input'][par['num_motion_tuned']:,:fixation_end[b], b] += np.reshape(fix_resp,(-1,1))
-
+            self.trial_info['neural_input'][:fixation_end[b], b, par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned']] \
+                += par['tuning_height']
+            """
+            self.trial_info['neural_input'][:fixation_end[b], b, par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned']] \
+                += par['tuning_height']
+            """
             modality   = np.random.randint(2)
             neuron_ind = range(self.modality_size*modality, self.modality_size*(1+modality))
             stim_dir   = np.random.choice(self.motion_dirs)
             target_ind = int(np.round(par['num_motion_dirs']*(stim_dir+offset)/(2*np.pi))%par['num_motion_dirs'])
 
-            self.trial_info['neural_input'][neuron_ind, stim_onset[b]:stim_off, b] += np.reshape(self.circ_tuning(stim_dir),(-1,1))
-            self.trial_info['desired_output'][target_ind, resp_onset[b]:, b] = 1
-            self.trial_info['desired_output'][-1,:resp_onset[b], b] = 1
+            self.trial_info['neural_input'][stim_onset[b]:stim_off, b, neuron_ind] += np.reshape(self.circ_tuning(stim_dir),(1,-1))
+            self.trial_info['desired_output'][resp_onset[b]:, b, target_ind, ] = 1
+            self.trial_info['desired_output'][:resp_onset[b], b, -1] = 1
+
             self.trial_info['train_mask'][resp_onset[b]:resp_onset[b]+par['mask_duration']//par['dt'], b] = 0
 
+        #plt.imshow(self.trial_info['train_mask'], aspect = 'auto')
+        #plt.show()
 
         return self.trial_info
 
@@ -220,9 +232,9 @@ class MultiStimulus:
         stim_off   = stim_onset + np.random.choice(self.dm_stim_lengths, par['batch_size'])
         resp_time  = stim_off + 500//par['dt']
         for b in range(par['batch_size']):
-            fixation[:,:resp_time[b],b] = 1
-            stimulus[:,stim_onset:stim_off[b],b] = np.concatenate([modality1[:,b], modality2[:,b]], axis=0)[:,np.newaxis]
-            response[:,resp_time[b]:,b] = resp[:,b,np.newaxis]
+            fixation[:resp_time[b],b,:] = 1
+            stimulus[stim_onset:stim_off[b],b,:] = np.transpose(np.concatenate([modality1[:,b], modality2[:,b]], axis=0)[:,np.newaxis])
+            response[resp_time[b]:,b,:] = np.transpose(resp[:,b,np.newaxis])
             mask[resp_time[b]:resp_time[b]+par['mask_duration']//par['dt'],b] = 0
 
         # Tweak the fixation array
@@ -230,12 +242,21 @@ class MultiStimulus:
         resp_fix = fixation[0:1,:,:]
 
         # Merge activies and fixations into single vector
-        stimulus = np.concatenate([stimulus, stim_fix], axis=0)
-        response = np.concatenate([response, resp_fix], axis=0)
+        stimulus = np.concatenate([stimulus, fixation], axis=2)
+        response = np.concatenate([response, fixation[:,:,0:1]], axis=2)
 
-        self.trial_info['neural_input'] += stimulus
+        self.trial_info['neural_input'][:,:,:par['num_motion_tuned']+par['num_fix_tuned']] += stimulus
         self.trial_info['desired_output'] = response
         self.trial_info['train_mask'] = mask
+
+        """
+        plt.imshow(self.trial_info['neural_input'][:,0,:], aspect = 'auto')
+        plt.show()
+        plt.imshow(self.trial_info['desired_output'][:,0,:], aspect = 'auto')
+        plt.show()
+        plt.imshow(self.trial_info['train_mask'][:,:], aspect = 'auto')
+        plt.show()
+        """
 
         return self.trial_info
 

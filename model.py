@@ -8,6 +8,7 @@ from parameters import *
 import os, time
 import pickle
 import convolutional_layers
+from itertools import product
 import matplotlib.pyplot as plt
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID" # so the IDs match nvidia-smi
@@ -24,12 +25,17 @@ class Model:
 
         # Load the input activity, the target data, and the training mask
         # for this batch of trials
-        self.input_data         = tf.unstack(input_data, axis=1)
-        self.gating             = tf.reshape(gating, [-1,1])
-        self.target_data        = tf.unstack(target_data, axis=1)
-        self.mask               = tf.unstack(mask, axis=1)
+        self.input_data         = tf.unstack(input_data, axis=0)
+        self.gating             = tf.reshape(gating, [1,-1])
+        self.target_data        = tf.unstack(target_data, axis=0)
+        self.mask               = tf.unstack(mask, axis=0)
+        self.W_ei               = tf.constant(par['EI_matrix'])
 
         # Build the TensorFlow graph
+        self.hidden_state_hist = []
+        self.syn_x_hist = []
+        self.syn_u_hist = []
+        self.output = []
         self.run_model()
 
         # Train the model
@@ -39,23 +45,20 @@ class Model:
     def run_model(self):
 
         with tf.variable_scope('rnn'):
-            W_in  = tf.get_variable('W_in', initializer=par['w_in0'], trainable=True)
-            W_rnn = tf.get_variable('W_rnn', initializer=par['w_rnn0'], trainable=True)
-            b_rnn = tf.get_variable('b_rnn', initializer=par['b_rnn0'], trainable=True)
+            W_in  = tf.get_variable('W_in', initializer=par['W_in_init'], trainable=True)
+            W_rnn = tf.get_variable('W_rnn', initializer=par['W_rnn_init'], trainable=True)
+            b_rnn = tf.get_variable('b_rnn', initializer=par['b_rnn_init'], trainable=True)
 
         with tf.variable_scope('output'):
-            W_out = tf.get_variable('W_out', initializer=par['w_out0'], trainable=True)
-            b_out = tf.get_variable('b_out', initializer=par['b_out0'], trainable=True)
+            W_out = tf.get_variable('W_out', initializer=par['W_out_init'], trainable=True)
+            b_out = tf.get_variable('b_out', initializer=par['b_out_init'], trainable=True)
 
         if par['EI']:
-            W_rnn_eff = tf.tensordot(tf.nn.relu(W_rnn), tf.constant(par['EI_matrix']), [[2],[0]])
+            W_rnn_eff = tf.matmul(self.W_ei, tf.nn.relu(W_rnn))
         else:
             W_rnn_eff = W_rnn
 
-        self.hidden_state_hist = []
-        self.syn_x_hist = []
-        self.syn_u_hist = []
-        self.y_hat = []
+
 
         h = tf.constant(par['h_init'])
         syn_x = tf.constant(par['syn_x_init'])
@@ -90,23 +93,22 @@ class Model:
                 h_post = h
 
 
-            # Incident activity
-            inp_act = tf.tensordot(tf.nn.relu(W_in), tf.nn.relu(tf.transpose(x)), [[2],[0]])
-            rec_act = tf.tensordot(W_rnn_eff, h_post, [[2],[0]])
-            total_act = tf.reduce_sum(par['alpha_neuron']*(inp_act + rec_act), axis=1)
 
             # Hidden State
-            h = self.gating*tf.nn.relu(h*(1-par['alpha_neuron']) + total_act + b_rnn) \
-                + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32)
+            h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + par['alpha_neuron']*(tf.matmul(x, W_in) + \
+                tf.matmul(h_post, W_rnn_eff) + b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
+
+            #h = tf.minimum(50., h)
 
             # Output State
-            y_hat = tf.matmul(W_out,h) + b_out
+            y = tf.matmul(h, W_out) + b_out
 
             # Bookkeeping lists
             self.hidden_state_hist.append(h)
             self.syn_x_hist.append(syn_x)
             self.syn_u_hist.append(syn_u)
-            self.y_hat.append(tf.transpose(y_hat))
+            self.output.append(y)
+
 
 
     def optimize(self):
@@ -131,28 +133,41 @@ class Model:
 
         self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.square(self.hidden_state_hist))
 
+
         if par['loss_function'] == 'cross_entropy':
             self.task_loss = tf.reduce_mean([mask*tf.nn.softmax_cross_entropy_with_logits(logits = y, \
-                labels = target, dim=1) for y, target, mask in zip(self.y_hat, self.target_data, self.mask)])
+                labels = target, dim=1) for y, target, mask in zip(self.output, self.target_data, self.mask)])
         elif par['loss_function'] == 'MSE':
-            self.task_loss = tf.reduce_mean([m*tf.square(y-t) for y, t, m in zip(self.y_hat, self.target_data, self.mask)])
+            self.task_loss = tf.reduce_mean([m*tf.square(y-t) for y, t, m in zip(self.output, self.target_data, self.mask)])
         else:
             raise Exception('Invalid loss function identifier.')
 
+        output_softmax = [tf.nn.softmax(y, dim = 1) for y in self.output]
+        self.entropy_loss = -par['entropy_cost']*tf.reduce_mean([m*tf.reduce_sum(out_sm*tf.log(1e-7+out_sm), axis = 1) \
+            for (out_sm,m) in zip(output_softmax, self.mask)])
+
+        with tf.variable_scope('rnn', reuse = True):
+            W_in  = tf.get_variable('W_in')
+            W_rnn = tf.get_variable('W_rnn')
+
+        active_weights_rnn = tf.matmul(tf.reshape(self.gating,[-1,1]), tf.reshape(self.gating,[1,-1]))
+        active_weights_in = tf.tile(tf.reshape(self.gating,[1,-1]),[par['n_input'], 1])
+        self.weight_loss = par['weight_cost']*(tf.reduce_mean(active_weights_in*W_in**2) + tf.reduce_mean(tf.nn.relu(active_weights_rnn*W_rnn)**2))
+
         # Gradient of the loss+aux function, in order to both perform training and to compute delta_weights
         with tf.control_dependencies([self.task_loss, self.aux_loss, self.spike_loss]):
-            grads_and_vars = adam_optimizer.compute_gradients(self.task_loss + self.aux_loss + self.spike_loss)
+            grads_and_vars = adam_optimizer.compute_gradients(self.task_loss + self.aux_loss + self.spike_loss + self.weight_loss - self.entropy_loss)
 
             for (grad, var) in grads_and_vars:
                 if 'W_rnn' in var.op.name:
                     print('Applied W_rnn mask.')
-                    grad *= par['w_rnn_mask']
+                    grad *= par['W_rnn_mask']
                 elif 'W_in' in var.op.name:
                     print('Applied W_in mask.')
-                    grad *= par['w_in_mask']
+                    grad *= par['W_in_mask']
                 elif 'W_out' in var.op.name:
                     print('Applied W_out mask.')
-                    grad *= par['w_out_mask']
+                    grad *= par['W_out_mask']
 
             self.train_op = adam_optimizer.apply_gradients(grads_and_vars)
 
@@ -170,6 +185,8 @@ class Model:
 
         self.reset_weights()
 
+        self.make_recurrent_weights_positive()
+
 
     def reset_weights(self):
 
@@ -185,6 +202,16 @@ class Model:
                 reset_weights.append(tf.assign(var,new_weight))
 
         self.reset_weights = tf.group(*reset_weights)
+
+    def make_recurrent_weights_positive(self):
+
+        reset_weights = []
+        for var in self.variables:
+            if 'W_rnn' in var.op.name:
+                # make all negative weights slightly positive
+                reset_weights.append(tf.assign(var,tf.maximum(1e-9, var)))
+
+        self.reset_rnn_weights = tf.group(*reset_weights)
 
 
     def EWC(self):
@@ -263,20 +290,27 @@ def main(save_fn, gpu_id = None):
     # Create placeholders for the model
     # input_data, target_data, gating, mask
 
-    x  = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], par['n_input']], 'stim')
-    y   = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], par['n_output']], 'out')
-    mask   = tf.placeholder(tf.float32, [par['batch_size'], par['num_time_steps'], 1], 'mask')
+    x  = tf.placeholder(tf.float32, [par['num_time_steps'], par['batch_size'], par['n_input']], 'stim')
+    target   = tf.placeholder(tf.float32, [par['num_time_steps'], par['batch_size'], par['n_output']], 'out')
+    mask   = tf.placeholder(tf.float32, [par['num_time_steps'], par['batch_size']], 'mask')
     gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
 
     stim = stimulus.MultiStimulus()
     accuracy_full = []
     accuracy_grid = np.zeros((par['n_tasks'], par['n_tasks']))
 
+
+    key_info = ['synapse_config','spike_cost','weight_cost','entropy_cost','omega_c','omega_xi',\
+        'constrain_input_weights','num_sublayers','n_hidden','noise_rnn_sd','learning_rate']
+    print('Key info')
+    for k in key_info:
+        print(k, ' ', par[k])
+
     with tf.Session() as sess:
 
         device = '/cpu:0' if gpu_id is None else '/gpu:0'
         with tf.device(device):
-            model = Model(x, y, gating, mask)
+            model = Model(x, target, gating, mask)
 
         sess.run(tf.global_variables_initializer())
         t_start = time.time()
@@ -287,30 +321,39 @@ def main(save_fn, gpu_id = None):
             for i in range(par['n_train_batches']):
 
                 # make batch of training data
-                name, trial_info = stim.generate_trial(task)
-                stim_in = np.transpose(trial_info['neural_input'], [2,1,0])
-                y_hat   = np.transpose(trial_info['desired_output'], [2,1,0])
-                mk      = np.transpose(trial_info['train_mask'], [1,0])[...,np.newaxis]
+                name, stim_in, y_hat, mk = stim.generate_trial(task)
 
                 if par['stabilization'] == 'pathint':
-                    _, _, loss, AL, spike_loss, output = sess.run([model.train_op, model.update_small_omega, model.task_loss,\
-                        model.aux_loss, model.spike_loss, model.y_hat], \
-                        feed_dict = {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
+                    _, _, loss, AL, spike_loss, ent_loss, weight_loss, output = sess.run([model.train_op, \
+                        model.update_small_omega, model.task_loss, model.aux_loss, model.spike_loss, \
+                        model.entropy_loss, model.weight_loss, model.output], \
+                        feed_dict = {x:stim_in, target:y_hat, gating:par['gating'][task], mask:mk})
+                    sess.run([model.reset_rnn_weights])
 
                 elif par['stabilization'] == 'EWC':
                     _, loss, AL = sess.run([model.train_op, model.task_loss, model.aux_loss], feed_dict = \
-                        {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
+                        {x:stim_in, target:y_hat, gating:par['gating'][task], mask:mk})
 
-                if i%50 == 0:
+                if i%100 == 0:
                     acc = get_perf(y_hat, output, mk)
-                    print('Task:', task, 'Iter:', i, 'Acc:', acc, 'Task Loss:', loss, 'Aux Loss:',  AL, 'Spike Loss:', spike_loss)
+                    print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' loss ', loss, ' aux loss', AL, ' spike loss', spike_loss, \
+                        ' entropy loss', ent_loss, ' weight loss', weight_loss)
 
 
-                    # RUNNING ACCURACY DIAGNOSTICS
-                    fig, ax = plt.subplots(1,2)
-                    ax[0].imshow(y_hat[0,:,:])
-                    ax[1].imshow(np.minimum(np.array(output)[:,0,:], 50))
-                    plt.show()
+            # Test all tasks at the end of each learning session
+            num_reps = 10
+            for (task_prime, r) in product(range(task+1), range(num_reps)):
+
+                # make batch of training data
+                name, stim_in, y_hat, mk = stim.generate_trial(task_prime)
+
+                output,_ = sess.run([model.output, model.syn_x_hist], feed_dict = {x:stim_in, gating:par['gating'][task_prime]})
+                acc = get_perf(y_hat, output, mk)
+                accuracy_grid[task,task_prime] += acc/num_reps
+
+            print('Accuracy grid after task {}:'.format(task))
+            print(accuracy_grid[task,:])
+            print('')
 
             # Update big omegaes, and reset other values before starting new task
             if par['stabilization'] == 'pathint':
@@ -319,7 +362,9 @@ def main(save_fn, gpu_id = None):
                 for n in range(par['EWC_fisher_num_batches']):
                     stim_in, y_hat, mk = stim.make_batch(task, test = False)
                     big_omegas = sess.run([model.update_big_omega,model.big_omega_var], feed_dict = \
-                        {x:stim_in, y:y_hat, gating:par['gating'][task], mask:mk})
+                        {x:stim_in, target:y_hat, gating:par['gating'][task], mask:mk})
+
+
 
             # Reset the Adam Optimizer, and set the previous parater values to their current values
             sess.run(model.reset_adam_op)
@@ -331,21 +376,7 @@ def main(save_fn, gpu_id = None):
             if par['reset_weights']:
                 sess.run(model.reset_weights)
 
-            # Test all tasks at the end of each learning session
-            for task_prime in range(task+1):
 
-                # make batch of training data
-                name, trial_info = stim.generate_trial(task_prime)
-                stim_in = np.transpose(trial_info['neural_input'], [2,1,0])
-                y_hat   = np.transpose(trial_info['desired_output'], [2,1,0])
-                mk      = np.transpose(trial_info['train_mask'], [1,0])[...,np.newaxis]
-
-                acc = sess.run(model.accuracy, feed_dict={x:stim_in, y:y_hat, gating:par['gating'][task_prime], mask:mk})
-                accuracy_grid[task,task_prime] = acc
-
-            print('Accuracy grid after task {}:'.format(task))
-            print(np.round(accuracy_grid,2))
-            print('')
 
 
         if par['save_analysis']:
@@ -362,14 +393,12 @@ def get_perf(target, output, mask):
     only examine time points when test stimulus is on
     in another words, when target[:,:,-1] is not 0
     """
-    output = np.stack(output, axis=1)
-    ss =target[:,:,-1]==0
-    print(output.shape, target.shape, mask.shape, ss.shape)
-    mask *= np.reshape(target[:,:,-1] == 0, (par['batch_size'], par['num_time_steps'], 1))
+    output = np.stack(output, axis=0)
+    mk = mask*np.reshape(target[:,:,-1] == 0, (par['batch_size'], par['num_time_steps'], 1))
 
     target = np.argmax(target, axis = 2)
     output = np.argmax(output, axis = 2)
 
-    return np.sum(np.float32(target == output)*np.squeeze(mask))/np.sum(mask)
+    return np.sum(np.float32(target == output)*np.squeeze(mk))/np.sum(mk)
 
 #main('testing')

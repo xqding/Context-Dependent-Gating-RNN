@@ -2,7 +2,7 @@
 
 import numpy as np
 import tensorflow as tf
-from itertools import product
+from itertools import product, chain
 import matplotlib.pyplot as plt
 
 print("\n--> Loading parameters...")
@@ -18,45 +18,44 @@ par = {
     'save_dir'              : './savedir/',
     'loss_function'         : 'cross_entropy',     # cross_entropy or MSE
     'stabilization'         : 'pathint', # 'EWC' (Kirkpatrick method) or 'pathint' (Zenke method)
-    'learning_rate'         : 0.001,
     'save_analysis'         : False,
     'reset_weights'         : False,    # reset weights between tasks
 
     # Network configuration
-    'synapse_config'        : None,     # Full is 'std_stf'
+    'synapse_config'        : 'std_stf',     # Full is 'std_stf'
     'exc_inh_prop'          : 0.8,      # Literature 0.8, for EI off 1
     'var_delay'             : False,
 
     # Network shape
     'num_motion_tuned'      : 36,
-    'num_fix_tuned'         : 20,
-    'num_rule_tuned'        : 0,
-    'n_hidden'              : 100,
-    'n_dendrites'           : 1,
+    'num_fix_tuned'         : 8,
+    'num_rule_tuned'        : 20,
+    'n_hidden'              : 180,
+    'n_dendrites'           : 1, # don't use for now
 
     # Euclidean shape
-    'num_sublayers'         : 1,
+    'num_sublayers'         : 2,
     'neuron_dx'             : 1.0,
     'neuron_dy'             : 1.0,
     'neuron_dz'             : 10.0,
 
     # Timings and rates
-    'dt'                    : 50,
-    'learning_rate'         : 5e-3,
-    'membrane_time_constant': 50,
+    'dt'                    : 20,
+    'learning_rate'         : 2e-3,
+    'membrane_time_constant': 100,
     'connection_prob'       : 1.0,         # Usually 1
 
     # Variance values
-    'clip_max_grad_val'     : 0.5,
+    'clip_max_grad_val'     : 1.0,
     'input_mean'            : 0.0,
     'noise_in_sd'           : 0.1,
-    'noise_rnn_sd'          : 0.5,
+    'noise_rnn_sd'          : 0.25,
 
     # Task specs
     'task'                  : 'multistim',
     'n_tasks'               : 20,
     'multistim_trial_length': 4000,
-    'mask_duration'         : 200,
+    'mask_duration'         : 100,
     'dead_time'             : 200,
 
     # Tuning function data
@@ -65,22 +64,23 @@ par = {
     'kappa'                 : 2.0,        # concentration scaling factor for von Mises
 
     # Cost parameters
-    'spike_cost'            : 1e-7,
-    'wiring_cost'           : 0, #1e-6,
+    'spike_cost'            : 1e-5,
+    'weight_cost'           : 0.,
+    'entropy_cost'          : 0.01,
 
     # Synaptic plasticity specs
-    'tau_fast'              : 100,
+    'tau_fast'              : 200,
     'tau_slow'              : 1500,
     'U_stf'                 : 0.15,
     'U_std'                 : 0.45,
 
     # Training specs
     'batch_size'            : 256,
-    'n_train_batches'       : 1000,
+    'n_train_batches'       : 2000,
 
     # Omega parameters
-    'omega_c'               : 0.1,
-    'omega_xi'              : 0.01,
+    'omega_c'               : 5.,
+    'omega_xi'              : 0.001,
     'EWC_fisher_num_batches': 32,   # number of batches when calculating EWC
 
     # Gating parameters
@@ -93,12 +93,13 @@ par = {
     'ckpt_save_fn'          : 'model.ckpt',
     'ckpt_load_fn'          : 'model.ckpt',
 
+    'constrain_input_weights': True
+
 }
 
 ############################
 ### Dependent parameters ###
 ############################
-
 
 def update_parameters(updates):
     """
@@ -118,35 +119,31 @@ def gen_gating():
     par['gating'] = []
 
     for t in range(par['n_tasks']):
-        gating_task = []
-        gating_layer = np.zeros(par['n_hidden'], dtype=np.float32)
+        gating_task = np.zeros(par['n_hidden'], dtype=np.float32)
         for i in range(par['n_hidden']):
 
             if par['gating_type'] == 'XdG':
                 if np.random.rand() < 1-par['gate_pct']:
-                    gating_layer[i] = 1
+                    gating_task[i] = 1
 
             elif par['gating_type'] == 'split':
                 if t%par['n_subnetworks'] == i%par['n_subnetworks']:
                     if np.random.rand() < 1-par['gate_pct']:
-                        gating_layer[i] = 0.5
+                        gating_task[i] = 0.5
                     else:
-                        gating_layer[i] = 1
+                        gating_task[i] = 1
 
             elif par['gating_type'] == 'partial':
                 if np.random.rand() < 1-par['gate_pct']:
-                    gating_layer[i] = 0.5
+                    gating_task[i] = 0.5
                 else:
-                    gating_layer[i] = 1
+                    gating_task[i] = 1
 
             elif par['gating_type'] is None:
-                gating_layer[i] = 1
-
-            gating_task.append(gating_layer)
+                gating_task[i] = 1
 
         par['gating'].append(gating_task)
 
-    par['gating'] = np.array(par['gating'])[:,:,0]
 
 
 def initialize_weight(dims, connection_prob):
@@ -160,7 +157,7 @@ def spectral_radius(A):
     if A.ndim == 3:
         return np.max(abs(np.linalg.eigvals(np.sum(A, axis=1))))
     else:
-        return np.max(abs(np.linalg.eigvals(np.sum(A))))
+        return np.max(abs(np.linalg.eigvals(A)))
 
 
 def square_locs(num_locs, d1, d2):
@@ -193,22 +190,22 @@ def update_dependencies():
     # General network shape
     par['shape'] = (par['n_input'], par['n_hidden'], par['n_output'])
 
+    par['dt_sec'] = par['dt']/1000
     # Set up gating vectors for hidden layer
     gen_gating()
 
     # If num_inh_units is set > 0, then neurons can be either excitatory or
     # inihibitory; is num_inh_units = 0, then the weights projecting from
     # a single neuron can be a mixture of excitatory or inhibitory
-    if par['exc_inh_prop'] < 1:
-        par['EI'] = True
-    else:
-        par['EI']  = False
+    par['EI'] = True if par['exc_inh_prop'] < 1 else False
+
 
     par['num_exc_units'] = int(np.round(par['n_hidden']*par['exc_inh_prop']))
     par['num_inh_units'] = par['n_hidden'] - par['num_exc_units']
+    n = par['n_hidden']//par['num_inh_units']
+    par['ind_inh'] = np.arange(n-1,par['n_hidden'],n)
     par['EI_list'] = np.ones(par['n_hidden'], dtype=np.float32)
-    par['EI_list'][::par['n_hidden']//par['num_inh_units']] = -1.
-
+    par['EI_list'][par['ind_inh']] = -1.
     par['EI_matrix'] = np.diag(par['EI_list'])
 
     # Membrane time constant of RNN neurons
@@ -226,50 +223,44 @@ def update_dependencies():
     ### Setting up assorted intial weights, biases, and other values ###
     ####################################################################
 
-    par['h_init'] = 0.1*np.ones((par['n_hidden'], par['batch_size']), dtype=np.float32)
-
-    par['input_to_hidden_dims'] = [par['n_hidden'], par['n_dendrites'], par['n_input']]
-    par['hidden_to_hidden_dims'] = [par['n_hidden'], par['n_dendrites'], par['n_hidden']]
-    par['hidden_to_output_dims'] = [par['n_output'], par['n_hidden']]
+    par['h_init'] = 0.1*np.ones((par['batch_size'], par['n_hidden']), dtype=np.float32)
 
     # Initialize input weights
-    par['w_in0'] = initialize_weight(par['input_to_hidden_dims'], par['connection_prob'])
-    par['w_in_mask'] = np.ones(par['input_to_hidden_dims'], dtype = np.float32)
-
-    # Initialize starting recurrent weights
-    # If excitatory/inhibitory neurons desired, initializes with random matrix with
-    #   zeroes on the diagonal
-    # If not, initializes with a diagonal matrix
+    c = 0.05
     if par['EI']:
-        par['w_rnn0'] = initialize_weight(par['hidden_to_hidden_dims'], par['connection_prob'])
-
-        for i in range(par['n_hidden']):
-            par['w_rnn0'][i,:,i] = 0
-        par['w_rnn_mask'] = np.ones((par['hidden_to_hidden_dims']), dtype=np.float32) - np.eye(par['n_hidden'])[:,np.newaxis,:]
-        #par['w_rnn0'][:,:,par['num_exc_units']:] *= par['exc_inh_prop']/(1-par['exc_inh_prop'])
+        par['W_rnn_init'] = 0.02*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
+        par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32) - np.eye(par['n_hidden'])
+        par['W_rnn_init'] *= par['W_rnn_mask']
     else:
-        par['w_rnn0'] = np.concatenate([np.float32(0.5*np.eye(par['n_hidden']))[:,np.newaxis,:]]*par['n_dendrites'], axis=1)
-        par['w_rnn_mask'] = np.ones((par['hidden_to_hidden_dims']), dtype=np.float32)
-
-    par['b_rnn0'] = np.zeros((par['n_hidden'], 1), dtype=np.float32)
-
-
-
-    # Effective synaptic weights are stronger when no short-term synaptic plasticity
-    # is used, so the strength of the recurrent weights is reduced to compensate
+        par['W_rnn_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))
+        par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32)
+    """
     if par['synapse_config'] == None:
-        par['w_rnn0'] = par['w_rnn0']/(spectral_radius(par['w_rnn0']))
+        par['W_rnn_init'] /= (spectral_radius(par['W_rnn_init'])/2)
+    """
+    par['W_rnn_init'][par['ind_inh'], :] *= 4
 
+    #s = np.dot(par['EI_matrix'], par['W_rnn_init'])
+    #plt.imshow(s, aspect = 'auto')
+    #plt.colorbar()
+    #plt.show()
 
-    # Initialize output weights and biases
-    par['w_out0'] = initialize_weight(par['hidden_to_output_dims'], par['connection_prob'])
-    par['b_out0'] = np.zeros((par['n_output'], 1), dtype=np.float32)
-    par['w_out_mask'] = np.ones(par['hidden_to_output_dims'], dtype=np.float32)
+    par['W_out_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_output']]))
+    #par['W_in_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_input'], par['n_hidden']]))
+    par['W_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+    par['b_rnn_init'] = np.zeros((1,par['n_hidden']), dtype = np.float32)
+    par['b_out_init'] = np.zeros((1,par['n_output']), dtype = np.float32)
+
+    par['W_out_mask'] = np.ones((par['n_hidden'], par['n_output']), dtype=np.float32)
+    par['W_in_mask'] = np.ones((par['n_input'], par['n_hidden']), dtype=np.float32)
 
     if par['EI']:
-        par['ind_inh'] = np.where(par['EI_list'] == -1)[0]
-        par['w_out0'][:, par['ind_inh']] = 0
-        par['w_out_mask'][:, par['ind_inh']] = 0
+        par['W_out_init'][par['ind_inh'], :] = 0
+        par['W_out_mask'][par['ind_inh'], :] = 0
+
+
+    #par['W_in_init'][:par['num_motion_tuned'], 30:] = 0
+    #par['W_in_mask'][:par['num_motion_tuned'], 30:] = 0
 
     # Defining sublayers for the hidden layer
     n_per_sub = par['n_hidden']//par['num_sublayers']
@@ -282,6 +273,7 @@ def update_dependencies():
             app = 0
         sublayers.append(range(i*n_per_sub,(i+1)*n_per_sub+app))
         sublayer_sizes.append(n_per_sub+app)
+
 
     # Determine physical sublayer positions
     input_pos = np.zeros([par['n_input'], 3])
@@ -298,7 +290,7 @@ def update_dependencies():
 
     output_pos[:,0:2] = square_locs(par['n_output'], par['neuron_dx'], par['neuron_dy']).T
     output_pos[:,2] = np.max(hidden_pos[:,2]) + par['neuron_dz']
-
+    """
     # Apply physical positions to relative positional matrix
     par['w_in_pos'] = np.zeros(par['input_to_hidden_dims'])
     for i,j in product(range(par['n_input']), range(par['n_hidden'])):
@@ -311,24 +303,48 @@ def update_dependencies():
     par['w_out_pos'] = np.zeros(par['hidden_to_output_dims'])
     for i,j in product(range(par['n_hidden']), range(par['n_output'])):
         par['w_out_pos'][j,i] = np.sqrt(np.sum(np.square(hidden_pos[i,:] - output_pos[j,:])))
+    """
+
 
     # Specify connections to sublayers
     for i in range(1, par['num_sublayers']):
-        par['w_in0'][sublayers[i],:,:] = 0
-        par['w_in_mask'][sublayers[i],:,:] = 0
+        par['W_in_init'][:par['num_motion_tuned']+par['num_fix_tuned'], sublayers[i]] = 0
+        par['W_in_mask'][:par['num_motion_tuned']+par['num_fix_tuned'], sublayers[i]] = 0
+
+    if par['constrain_input_weights']:
+        k = 0
+        # motion tuned only projects to sublayers[i][0:-1:3]
+        #for i in chain(sublayers[k][1:-1:3], sublayers[k][2:-1:3]):
+        for i in sublayers[k][0:-1:4]:
+            par['W_in_init'][:par['num_motion_tuned'], i] = 0
+            par['W_in_mask'][:par['num_motion_tuned'], i] = 0
+
+        # fixation tuned only prohject to sublayers[i][0:-1:3]
+        for i in chain(sublayers[k][1:-1:4], sublayers[k][2:-1:4], sublayers[k][3:-1:4]):
+            par['W_in_init'][par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned'], i] = 0
+            par['W_in_mask'][par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned'], i] = 0
+
+    """
+    # rule tuned only prohject to sublayers[i][2:-1:3]
+    for i in chain(sublayers[k][0:-1:3], sublayers[k][1:-1:3]):
+        par['W_in_init'][-par['num_rule_tuned']:, i] = 0
+        par['W_in_mask'][-par['num_rule_tuned']:, i] = 0
+    """
+
+
+
 
     # Only allow connections between adjacent sublayers
     for i,j in product(range(par['num_sublayers']), range(par['num_sublayers'])):
         if np.abs(i-j) > 1:
             for k,m in product(sublayers[i], sublayers[j]):
-                par['w_rnn0'][k,:,m] = 0
-                par['w_rnn_mask'][k,:,m] = 0
+                par['W_rnn_init'][m,k] = 0
+                par['W_rnn_mask'][m,k] = 0
 
     # Specify connections from sublayers
     for i in range(par['num_sublayers'] - 1):
-        par['w_out0'][:, sublayers[i]] = 0
-        par['w_out_mask'][:, sublayers[i]] = 0
-
+        par['W_out_init'][sublayers[i], :] = 0
+        par['W_out_mask'][sublayers[i], :] = 0
 
     """
     Setting up synaptic parameters
@@ -350,7 +366,7 @@ def update_dependencies():
     elif par['synapse_config'] == 'std_stf':
         par['synapse_type'] = np.ones(par['n_hidden'], dtype=np.int8)
         par['ind'] = range(1,par['n_hidden'],2)
-        par['synapse_type'][par['ind']] = 2
+        par['synapse_type'][par['ind']] = 1
 
     par['alpha_stf'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
     par['alpha_std'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
@@ -374,6 +390,12 @@ def update_dependencies():
             par['U'][i,0] = 0.45
             par['syn_x_init'][i,:] = 1
             par['syn_u_init'][i,:] = par['U'][i,0]
+
+    par['alpha_stf'] = np.transpose(par['alpha_stf'])
+    par['alpha_std'] = np.transpose(par['alpha_std'])
+    par['U'] = np.transpose(par['U'])
+    par['syn_x_init'] = np.transpose(par['syn_x_init'])
+    par['syn_u_init'] = np.transpose(par['syn_u_init'])
 
 
 update_dependencies()
