@@ -127,21 +127,7 @@ class MultiStimulus:
             self.trial_info['reward_data'][respond_time,b,correct_response] = 1
             for i in incorrect_response:
                 self.trial_info['reward_data'][respond_time,b,i] = -0.01
-        """
-        plt.subplot(2,2,1)
-        plt.imshow(self.trial_info['desired_output'][:,0,:], aspect = 'auto')
-        plt.colorbar()
-        plt.subplot(2,2,3)
-        plt.imshow(self.trial_info['desired_output'][:,1,:], aspect = 'auto')
-        plt.colorbar()
-        plt.subplot(2,2,2)
-        plt.imshow(self.trial_info['reward_data'][:,0,:], aspect = 'auto')
-        plt.colorbar()
-        plt.subplot(2,2,4)
-        plt.imshow(self.trial_info['reward_data'][:,1,:], aspect = 'auto')
-        plt.colorbar()
-        plt.show()
-        """
+
 
         return task[1], self.trial_info['neural_input'], self.trial_info['desired_output'], \
             self.trial_info['train_mask'], self.trial_info['reward_data']
