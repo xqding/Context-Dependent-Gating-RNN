@@ -102,6 +102,7 @@ class MultiStimulus:
         self.trial_info = {
             'neural_input'   : np.random.normal(par['input_mean'], par['noise_in'], size=self.input_shape),
             'desired_output' : np.zeros(self.output_shape, dtype=np.float32),
+            'reward_data'    : np.zeros(self.output_shape, dtype=np.float32),
             'train_mask'     : np.ones(self.mask_shape, dtype=np.float32)}
 
         self.trial_info['train_mask'][:par['dead_time']//par['dt'], :] = 0
@@ -113,7 +114,37 @@ class MultiStimulus:
         task = self.task_types[current_task]    # Selects a task from the list
         task[0](*task[1:])                      # Generates that task into trial_info
         # Returns the trial info and the task name
-        return task[1], self.trial_info['neural_input'], self.trial_info['desired_output'], self.trial_info['train_mask']
+
+        # give -1 for breaking fixation, -0.01/+2 for choosing incorrectly/correctly
+        for b in range(par['batch_size']):
+            fix_time = np.where(self.trial_info['desired_output'][:,b,-1] == 1)[0]
+            #respond_time = np.where(np.sum(self.trial_info['desired_output'][:,b,:-1],axis=1) > 0)[0]
+            respond_time = np.where(self.trial_info['desired_output'][:,b,-1] == 0)[0]
+            correct_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:]==1)[0]
+            incorrect_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:-1]==0)[0]
+
+            self.trial_info['reward_data'][fix_time,b,:-1] = -1
+            self.trial_info['reward_data'][respond_time,b,correct_response] = 1
+            for i in incorrect_response:
+                self.trial_info['reward_data'][respond_time,b,i] = -0.01
+        """
+        plt.subplot(2,2,1)
+        plt.imshow(self.trial_info['desired_output'][:,0,:], aspect = 'auto')
+        plt.colorbar()
+        plt.subplot(2,2,3)
+        plt.imshow(self.trial_info['desired_output'][:,1,:], aspect = 'auto')
+        plt.colorbar()
+        plt.subplot(2,2,2)
+        plt.imshow(self.trial_info['reward_data'][:,0,:], aspect = 'auto')
+        plt.colorbar()
+        plt.subplot(2,2,4)
+        plt.imshow(self.trial_info['reward_data'][:,1,:], aspect = 'auto')
+        plt.colorbar()
+        plt.show()
+        """
+
+        return task[1], self.trial_info['neural_input'], self.trial_info['desired_output'], \
+            self.trial_info['train_mask'], self.trial_info['reward_data']
 
 
     def task_go(self, variant='go', offset=0):
@@ -125,14 +156,14 @@ class MultiStimulus:
             fixation_end = np.ones(par['batch_size'], dtype=np.int8)*1500//par['dt']
             resp_onset = fixation_end
         elif variant == 'rt_go':
-            stim_onset = np.random.randint(500, 2500, par['batch_size'])//par['dt']
+            stim_onset = np.random.randint(500, 1500, par['batch_size'])//par['dt']
             stim_off = -1
             fixation_end = np.ones(par['batch_size'],dtype=np.int8)*par['num_time_steps']
             resp_onset = stim_onset
         elif variant == 'dly_go':
             stim_onset = 500//par['dt']*np.ones(par['batch_size'],dtype=np.int8)
             stim_off = 750//par['dt']
-            fixation_end = stim_off + np.random.choice([100,200,400,800], size=par['batch_size'])//par['dt']
+            fixation_end = stim_off + np.random.choice([200,400,800,1600], size=par['batch_size'])//par['dt']
             resp_onset = fixation_end
         else:
             raise Exception('Bad task variant.')
@@ -160,9 +191,6 @@ class MultiStimulus:
 
             self.trial_info['train_mask'][resp_onset[b]:resp_onset[b]+par['mask_duration']//par['dt'], b] = 0
 
-        #plt.imshow(self.trial_info['train_mask'], aspect = 'auto')
-        #plt.show()
-
         return self.trial_info
 
 
@@ -171,6 +199,8 @@ class MultiStimulus:
         # Create trial stimuli
         stim_dir1 = np.random.choice(self.motion_dirs, [1, par['batch_size']])
         stim_dir2 = (stim_dir1 + np.pi/2 + np.random.choice(self.motion_dirs[::2], [1, par['batch_size']])/2)%(2*np.pi)
+
+
         stim1 = self.circ_tuning(stim_dir1)
         stim2 = self.circ_tuning(stim_dir2)
 
@@ -188,9 +218,17 @@ class MultiStimulus:
         resp_dir_mod2 = np.where(gamma_s1_m2 > gamma_s2_m2, stim_dir1, stim_dir2)
         resp_dir_sum  = np.where(gamma_s1_m1 + gamma_s1_m2 > gamma_s2_m1 + gamma_s2_m2, stim_dir1, stim_dir2)
 
+        #print('stim dirs 1', 180*stim_dir1[0,:10]/np.pi)
+        #print('stim dirs 2', 180*stim_dir2[0,:10]/np.pi)
+        #print('gamma_s1_m1', gamma_s1_m1[0,:10])
+        #print('gamma_s2_m1', gamma_s2_m1[0,:10])
+        #print('resp_dir_mod1', 180*resp_dir_mod1[0,:10]/np.pi)
+
         resp_dir_mod1 = np.round(par['num_motion_dirs']*resp_dir_mod1/(2*np.pi))
         resp_dir_mod2 = np.round(par['num_motion_dirs']*resp_dir_mod2/(2*np.pi))
         resp_dir_sum  = np.round(par['num_motion_dirs']*resp_dir_sum/(2*np.pi))
+
+        #print('resp_dir_mod1', resp_dir_mod1[0,:10])
 
         # Apply stimuli to modalities and build appropriate response
         if variant == 'dm1':
@@ -230,16 +268,19 @@ class MultiStimulus:
         # Identify stimulus onset for each trial and build each trial from there
         stim_onset = 500//par['dt']
         stim_off   = stim_onset + np.random.choice(self.dm_stim_lengths, par['batch_size'])
-        resp_time  = stim_off + 500//par['dt']
+        #resp_time  = stim_off + 500//par['dt']
         for b in range(par['batch_size']):
-            fixation[:resp_time[b],b,:] = 1
+            #fixation[:resp_time[b],b,:] = 1
+            fixation[:stim_off[b],b,:] = 1
             stimulus[stim_onset:stim_off[b],b,:] = np.transpose(np.concatenate([modality1[:,b], modality2[:,b]], axis=0)[:,np.newaxis])
-            response[resp_time[b]:,b,:] = np.transpose(resp[:,b,np.newaxis])
-            mask[resp_time[b]:resp_time[b]+par['mask_duration']//par['dt'],b] = 0
+            #response[resp_time[b]:,b,:] = np.transpose(resp[:,b,np.newaxis])
+            #mask[resp_time[b]:resp_time[b]+par['mask_duration']//par['dt'],b] = 0
+            response[stim_off[b]:,b,:] = np.transpose(resp[:,b,np.newaxis])
+            mask[stim_off[b]:stim_off[b]+par['mask_duration']//par['dt'],b] = 0
 
         # Tweak the fixation array
-        stim_fix = fixation
-        resp_fix = fixation[0:1,:,:]
+        #stim_fix = fixation
+        #resp_fix = fixation[0:1,:,:]
 
         # Merge activies and fixations into single vector
         stimulus = np.concatenate([stimulus, fixation], axis=2)
@@ -250,13 +291,15 @@ class MultiStimulus:
         self.trial_info['train_mask'] = mask
 
         """
+        plt.subplot(2,2,1)
         plt.imshow(self.trial_info['neural_input'][:,0,:], aspect = 'auto')
-        plt.show()
+        plt.subplot(2,2,2)
         plt.imshow(self.trial_info['desired_output'][:,0,:], aspect = 'auto')
-        plt.show()
+        plt.subplot(2,2,3)
         plt.imshow(self.trial_info['train_mask'][:,:], aspect = 'auto')
         plt.show()
         """
+
 
         return self.trial_info
 

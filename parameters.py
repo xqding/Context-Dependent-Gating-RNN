@@ -30,8 +30,9 @@ par = {
     'num_motion_tuned'      : 36,
     'num_fix_tuned'         : 8,
     'num_rule_tuned'        : 20,
-    'n_hidden'              : 180,
+    'n_hidden'              : 360,
     'n_dendrites'           : 1, # don't use for now
+    'n_val'                 : 1,
 
     # Euclidean shape
     'num_sublayers'         : 2,
@@ -41,20 +42,21 @@ par = {
 
     # Timings and rates
     'dt'                    : 20,
-    'learning_rate'         : 2e-3,
+    'learning_rate'         : 4e-3,
     'membrane_time_constant': 100,
-    'connection_prob'       : 1.0,         # Usually 1
+    'connection_prob'       : 1.0,
+    'discount_rate'         : 0.,
 
     # Variance values
     'clip_max_grad_val'     : 1.0,
     'input_mean'            : 0.0,
-    'noise_in_sd'           : 0.1,
-    'noise_rnn_sd'          : 0.25,
+    'noise_in_sd'           : 0.,
+    'noise_rnn_sd'          : 0.1,
 
     # Task specs
     'task'                  : 'multistim',
     'n_tasks'               : 20,
-    'multistim_trial_length': 4000,
+    'multistim_trial_length': 3000,
     'mask_duration'         : 100,
     'dead_time'             : 200,
 
@@ -79,13 +81,14 @@ par = {
     'n_train_batches'       : 2000,
 
     # Omega parameters
-    'omega_c'               : 5.,
-    'omega_xi'              : 0.001,
-    'EWC_fisher_num_batches': 32,   # number of batches when calculating EWC
+    'omega_c'               : 1.,
+    'omega_xi'              : 0.01,
+    'EWC_fisher_num_batches': 8,   # number of batches when calculating EWC
+    'include_val_stab'      : 1., # 1. or 0.
 
     # Gating parameters
     'gating_type'           : 'XdG', # 'XdG', 'partial', 'split', None
-    'gate_pct'              : 0.5,  # Num. gated hidden units for 'XdG' only
+    'gate_pct'              : 0.75,  # Num. gated hidden units for 'XdG' only
     'n_subnetworks'         : 4,    # Num. subnetworks for 'split' only
 
     # Save paths
@@ -183,6 +186,7 @@ def update_dependencies():
 
     # Number of output neurons
     par['n_output'] = par['num_motion_dirs'] + 1
+    par['n_pol'] = par['num_motion_dirs'] + 1
 
     # Number of input neurons
     par['n_input'] = par['num_motion_tuned'] + par['num_fix_tuned'] + par['num_rule_tuned']
@@ -226,9 +230,9 @@ def update_dependencies():
     par['h_init'] = 0.1*np.ones((par['batch_size'], par['n_hidden']), dtype=np.float32)
 
     # Initialize input weights
-    c = 0.05
+    c = 0.2
     if par['EI']:
-        par['W_rnn_init'] = 0.02*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
+        par['W_rnn_init'] = c*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
         par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32) - np.eye(par['n_hidden'])
         par['W_rnn_init'] *= par['W_rnn_mask']
     else:
@@ -245,7 +249,8 @@ def update_dependencies():
     #plt.colorbar()
     #plt.show()
 
-    par['W_out_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_output']]))
+    #par['W_out_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_output']]))
+    par['W_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_output']]))
     #par['W_in_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_input'], par['n_hidden']]))
     par['W_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
     par['b_rnn_init'] = np.zeros((1,par['n_hidden']), dtype = np.float32)
@@ -258,9 +263,12 @@ def update_dependencies():
         par['W_out_init'][par['ind_inh'], :] = 0
         par['W_out_mask'][par['ind_inh'], :] = 0
 
+    # RL
+    par['W_pol_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_pol']]))
+    par['W_val_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_val']]))
+    par['b_pol_out_init'] = np.zeros((1,par['n_pol']), dtype = np.float32)
+    par['b_val_out_init'] = np.zeros((1,par['n_val']), dtype = np.float32)
 
-    #par['W_in_init'][:par['num_motion_tuned'], 30:] = 0
-    #par['W_in_mask'][:par['num_motion_tuned'], 30:] = 0
 
     # Defining sublayers for the hidden layer
     n_per_sub = par['n_hidden']//par['num_sublayers']
