@@ -117,8 +117,12 @@ class MultiStimulus:
 
         # give -1 for breaking fixation, -0.01/+2 for choosing incorrectly/correctly
         for b in range(par['batch_size']):
-            respond_time = np.where(np.sum(self.trial_info['desired_output'][:,b,:-1],axis = 2) > 0)[0]
-            fix_time = list(range(respond_time[0]))
+            respond_time = np.where(np.sum(self.trial_info['desired_output'][:,b,:-1],axis=1) > 0)[0]
+
+            # Else statements strictly for non-matches in matching task
+            fix_time = list(range(respond_time[0])) if len(respond_time) > 0 else [-1]
+            respond_time = respond_time if len(respond_time) > 0 else [-1]
+
             correct_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:]==1)[0]
             incorrect_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:-1]==0)[0]
             if b==-1:
@@ -477,19 +481,12 @@ class MultiStimulus:
                 resp_fix[:,b,:] = 1
 
         # Merge activies and fixations into single vectors)
-        plt.imshow(fixation[:,:,0])
-        plt.show()
-        quit()
         stimulus = np.concatenate([modalities[0], modalities[1], fixation], axis=2)
         response = np.concatenate([response, np.maximum(resp_fix, fixation[:,:,0:1])], axis=2)
 
         self.trial_info['neural_input'][:,:,:par['num_motion_tuned']+par['num_fix_tuned']] += stimulus
         self.trial_info['desired_output'] = response
         self.trial_info['train_mask'] = mask
-
-        for b in range(10):
-            plt.imshow(response[:,b,:])
-            plt.show()
 
         return self.trial_info
 
@@ -518,9 +515,3 @@ for i in range(len(st.task_types)):
     plt.show()
 quit()
 """
-
-st = MultiStimulus()
-for i in range(14,20):
-    print(i, '-----------------------------------------')
-    name, input_data, output_data, mask_data, reward_data = st.generate_trial(i)
-    print(i, name.ljust(12), input_data.shape, output_data.shape, mask_data.shape, reward_data.shape)
