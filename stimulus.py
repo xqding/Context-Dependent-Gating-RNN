@@ -28,7 +28,7 @@ class MultiStimulus:
 
         # DM Dly task stuff
         self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])
-        self.dm_dly_delay = np.array([200, 400, 800, 1600])//par['dt']
+        self.dm_dly_delay = np.array([100, 200, 400, 800])//par['dt']
 
         # Matching task stuff
         self.match_delay = np.array([200, 400, 800, 1600])//par['dt']
@@ -398,21 +398,17 @@ class MultiStimulus:
         stim_off2  = stim_on2 + 300//par['dt']
         resp_time  = stim_off2 + 300//par['dt']
         for b in range(par['batch_size']):
-            fixation[:,:resp_time[0,b],b] = 1
-            stimulus[:,stim_on1:stim_off1,b] = np.concatenate([modality1_t1[:,b], modality2_t1[:,b]], axis=0)[:,np.newaxis]
-            stimulus[:,stim_on2[0,b]:stim_off2[0,b],b] = np.concatenate([modality1_t2[:,b], modality2_t2[:,b]], axis=0)[:,np.newaxis]
-            response[:,resp_time[0,b]:,b] = resp[:,b,np.newaxis]
+            fixation[:resp_time[0,b],b,:] = 1
+            stimulus[stim_on1:stim_off1,b,:] = np.concatenate([modality1_t1[:,b], modality2_t1[:,b]], axis=0)[np.newaxis,:]
+            stimulus[stim_on2[0,b]:stim_off2[0,b],b] = np.concatenate([modality1_t2[:,b], modality2_t2[:,b]], axis=0)[np.newaxis,:]
+            response[resp_time[0,b]:,b,:] = resp[np.newaxis,:,b]
             mask[resp_time[0,b]:resp_time[0,b]+par['mask_duration'],b] = 0
 
-        # Tweak the fixation array
-        #stim_fix = fixation
-        #resp_fix = fixation[0:1,:,:]
-
         # Merge activies and fixations into single vectors
-        stimulus = np.concatenate([stimulus, fixation], axis=0)
-        response = np.concatenate([response, fixation[0:1,:,:]], axis=0)
+        stimulus = np.concatenate([stimulus, fixation], axis=2)
+        response = np.concatenate([response, fixation[:,:,0:1]], axis=2)    # Duplicates starting fixation on output
 
-        self.trial_info['neural_input'] += stimulus
+        self.trial_info['neural_input'][:,:,:par['num_motion_tuned']+par['num_fix_tuned']] += stimulus
         self.trial_info['desired_output'] = response
         self.trial_info['train_mask'] = mask
 
@@ -456,7 +452,7 @@ class MultiStimulus:
 
         # Setting up arrays
         modality_choice = np.random.choice(np.array([0,1], dtype=np.int8), [2, par['batch_size']])
-        modalities = np.zeros([2, par['num_motion_tuned']//2, par['num_time_steps'], par['batch_size']])
+        modalities = np.zeros([2, par['num_time_steps'], par['batch_size'], par['num_motion_tuned']//2])
         fixation = np.zeros(self.fixation_shape)
         response = np.zeros(self.response_shape)
         stimulus = np.zeros(self.stimulus_shape)
@@ -469,28 +465,32 @@ class MultiStimulus:
         stim2_on  = stim1_off + np.random.choice(self.match_delay, par['batch_size'])
         stim2_off = stim2_on + 300//par['dt']
         resp_time = stim2_off
-        resp_fix  = np.copy(fixation[0:1,:,:])
+        resp_fix  = np.copy(fixation[:,:,0:1])
+
         for b in range(par['batch_size']):
-            fixation[:,:resp_time[b],b] = 1
-            modalities[modality_choice[0,b],:,stim1_on:stim1_off,b] = stimulus1[:,b,np.newaxis]
-            modalities[modality_choice[1,b],:,stim2_on[b]:stim2_off[b],b] = stimulus2[:,b,np.newaxis]
+            fixation[:resp_time[b],b,:] = 1
+            modalities[modality_choice[0,b],stim1_on:stim1_off,b,:] = stimulus1[np.newaxis,:,b]
+            modalities[modality_choice[1,b],stim2_on[b]:stim2_off[b],b,:] = stimulus2[np.newaxis,:,b]
             mask[resp_time[b]:resp_time[b]+par['mask_duration']//par['dt'],b] = 0
             if not resp[b] == -1:
-                response[int(resp[b]),resp_time[b]:,b] = 1
+                response[resp_time[b]:,b,int(resp[b])] = 1
             else:
-                resp_fix[:,:,b] = 1
-
-        # Tweak the fixation array
-        stim_fix = fixation
-        resp_fix = np.maximum(resp_fix, fixation[0:1,:,:])
+                resp_fix[:,b,:] = 1
 
         # Merge activies and fixations into single vectors)
-        stimulus = np.concatenate([modalities[0], modalities[1], stim_fix], axis=0)
-        response = np.concatenate([response, resp_fix], axis=0)
+        plt.imshow(fixation[:,:,0])
+        plt.show()
+        quit()
+        stimulus = np.concatenate([modalities[0], modalities[1], fixation], axis=2)
+        response = np.concatenate([response, np.maximum(resp_fix, fixation[:,:,0:1])], axis=2)
 
-        self.trial_info['neural_input'] += stimulus
+        self.trial_info['neural_input'][:,:,:par['num_motion_tuned']+par['num_fix_tuned']] += stimulus
         self.trial_info['desired_output'] = response
         self.trial_info['train_mask'] = mask
+
+        for b in range(10):
+            plt.imshow(response[:,b,:])
+            plt.show()
 
         return self.trial_info
 
@@ -519,3 +519,9 @@ for i in range(len(st.task_types)):
     plt.show()
 quit()
 """
+
+st = MultiStimulus()
+for i in range(14,20):
+    print(i, '-----------------------------------------')
+    name, input_data, output_data, mask_data, reward_data = st.generate_trial(i)
+    print(i, name.ljust(12), input_data.shape, output_data.shape, mask_data.shape, reward_data.shape)
