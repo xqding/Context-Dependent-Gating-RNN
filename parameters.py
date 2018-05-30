@@ -50,7 +50,7 @@ par = {
     'clip_max_grad_val'     : 1.0,
     'input_mean'            : 0.0,
     'noise_in_sd'           : 0.,
-    'noise_rnn_sd'          : 0.05,
+    'noise_rnn_sd'          : 0.1,
 
     # Task specs
     'task'                  : 'multistim',
@@ -65,7 +65,7 @@ par = {
     'kappa'                 : 2.0,        # concentration scaling factor for von Mises
 
     # Cost parameters
-    'spike_cost'            : 1e-7,
+    'spike_cost'            : 2e-2,
     'weight_cost'           : 0.,
     'entropy_cost'          : 0.02,
 
@@ -77,16 +77,16 @@ par = {
 
     # Training specs
     'batch_size'            : 256,
-    'n_train_batches'       : 3000,
+    'n_train_batches'       : 1000,
 
     # Omega parameters
-    'omega_c'               : 0.002,
+    'omega_c'               : 0.2,
     'omega_xi'              : 0.01,
     'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
     'include_val_stab'      : 1., # 1. or 0.
 
     # Gating parameters
-    'gating_type'           : 'XdG', # 'XdG', 'partial', 'split', None
+    'gating_type'           : None, # 'XdG', 'partial', 'split', None
     'gate_pct'              : 0.75,  # Num. gated hidden units for 'XdG' only
     'n_subnetworks'         : 4,    # Num. subnetworks for 'split' only
 
@@ -322,12 +322,13 @@ def update_dependencies():
         k = 0
         # motion tuned only projects to sublayers[i][0:-1:3]
         #for i in chain(sublayers[k][1:-1:3], sublayers[k][2:-1:3]):
-        for i in sublayers[k][0:-1:4]:
+        for i in sublayers[k][0:-1:6]:
             par['W_in_init'][:par['num_motion_tuned'], i] = 0
             par['W_in_mask'][:par['num_motion_tuned'], i] = 0
 
         # fixation tuned only prohject to sublayers[i][0:-1:3]
-        for i in chain(sublayers[k][1:-1:4], sublayers[k][2:-1:4], sublayers[k][3:-1:4]):
+        for i in chain(sublayers[k][1:-1:6], sublayers[k][2:-1:6], sublayers[k][3:-1:6],\
+            sublayers[k][4:-1:6], sublayers[k][5:-1:6], sublayers[k][6:-1:6]):
             par['W_in_init'][par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned'], i] = 0
             par['W_in_mask'][par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned'], i] = 0
 

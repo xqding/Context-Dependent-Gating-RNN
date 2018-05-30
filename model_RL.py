@@ -60,7 +60,7 @@ class Model:
         """
         Initialize weights and biases
         """
-        self.define_vars(reuse = False)
+        self.define_vars()
 
         h = tf.constant(par['h_init'])
         syn_x = tf.constant(par['syn_x_init'])
@@ -121,21 +121,21 @@ class Model:
         self.variables = [var for var in tf.trainable_variables()]
         adam_optimizer = AdamOpt.AdamOpt(self.variables, learning_rate = par['learning_rate'])
 
-        previous_weights_mu_minus_1 = {}
+        self.previous_weights_mu_minus_1 = {}
         reset_prev_vars_ops = []
         self.big_omega_var = {}
         aux_losses = []
 
         for var in self.variables:
             self.big_omega_var[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
-            previous_weights_mu_minus_1[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
+            self.previous_weights_mu_minus_1[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
             aux_losses.append(par['omega_c']*tf.reduce_sum(tf.multiply(self.big_omega_var[var.op.name], \
-               tf.square(previous_weights_mu_minus_1[var.op.name] - var) )))
-            reset_prev_vars_ops.append( tf.assign(previous_weights_mu_minus_1[var.op.name], var ) )
+               tf.square(self.previous_weights_mu_minus_1[var.op.name] - var) )))
+            reset_prev_vars_ops.append( tf.assign(self.previous_weights_mu_minus_1[var.op.name], var ) )
 
         self.aux_loss = tf.add_n(aux_losses)
 
-        self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.stack([mask*time_mask*tf.square(h) for (h, mask, time_mask) in zip(self.h, self.mask, self.time_mask)]))
+        self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.stack([mask*time_mask*tf.reduce_mean(h) for (h, mask, time_mask) in zip(self.h, self.mask, self.time_mask)]))
 
         self.pol_loss = -tf.reduce_mean(tf.stack([advantage*time_mask*mask*act*tf.log((epsilon + pol_out)) \
             for (pol_out, advantage, act, mask, time_mask) in zip(self.pol_out, self.advantage, \
@@ -158,7 +158,7 @@ class Model:
         # Stabilizing weights
         if par['stabilization'] == 'pathint':
             # Zenke method
-            self.pathint_stabilization(adam_optimizer, previous_weights_mu_minus_1)
+            self.pathint_stabilization(adam_optimizer)
 
         elif par['stabilization'] == 'EWC':
             # Kirkpatrick method
@@ -168,6 +168,8 @@ class Model:
         self.reset_adam_op = adam_optimizer.reset_params()
 
         self.make_recurrent_weights_positive()
+        self.reset_zeroed_weights()
+
 
 
     def make_recurrent_weights_positive(self):
@@ -179,6 +181,29 @@ class Model:
                 reset_weights.append(tf.assign(var,tf.maximum(1e-9, var)))
 
         self.reset_rnn_weights = tf.group(*reset_weights)
+
+    def reset_zeroed_weights(self):
+
+        th = 1e-3
+        reset_shunted_weights = []
+        h = tf.stack(self.h)
+        mean_h = tf.reshape(tf.reduce_mean(h, axis = (0,1)),[1, par['n_hidden']])
+        mean_h2 = tf.matmul(tf.transpose(mean_h), mean_h)
+
+        h_zero = tf.cast(tf.less(mean_h, th), tf.float32)
+        h2_zero = tf.cast(tf.less(mean_h2, th), tf.float32)
+
+        for var in self.variables:
+            if 'W_rnn' in var.op.name:
+                reset_shunted_weights.append(tf.assign(var, (1.-h2_zero)*var + \
+                    h2_zero*self.previous_weights_mu_minus_1[var.op.name] ))
+                reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h2_zero)*self.small_omega_var[var.op.name]))
+            elif 'b_rnn' in var.op.name:
+                reset_shunted_weights.append(tf.assign(var, (1.-h_zero)*var + \
+                    h_zero*self.previous_weights_mu_minus_1[var.op.name] ))
+                reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h_zero)*self.small_omega_var[var.op.name]))
+
+        self.reset_shunted_weights = tf.group(*reset_shunted_weights)
 
 
     def EWC(self):
@@ -199,11 +224,11 @@ class Model:
         self.update_big_omega = tf.group(*fisher_ops)
 
 
-    def pathint_stabilization(self, adam_optimizer, previous_weights_mu_minus_1):
+    def pathint_stabilization(self, adam_optimizer):
         # Zenke method
 
         optimizer_task = tf.train.GradientDescentOptimizer(learning_rate =  1.0)
-        small_omega_var = {}
+        self.small_omega_var = {}
         small_omega_var_div = {}
 
         reset_small_omega_ops = []
@@ -222,10 +247,10 @@ class Model:
 
         for var in self.variables:
 
-            small_omega_var[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
+            self.small_omega_var[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
             small_omega_var_div[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
-            reset_small_omega_ops.append( tf.assign( small_omega_var[var.op.name], small_omega_var[var.op.name]*0.0 ) )
-            update_big_omega_ops.append( tf.assign_add( self.big_omega_var[var.op.name], tf.div(tf.abs(small_omega_var[var.op.name]), \
+            reset_small_omega_ops.append( tf.assign(self.small_omega_var[var.op.name], self.small_omega_var[var.op.name]*0.0 ) )
+            update_big_omega_ops.append( tf.assign_add( self.big_omega_var[var.op.name], tf.div(tf.abs(self.small_omega_var[var.op.name]), \
             	(par['omega_xi'] + small_omega_var_div[var.op.name]))))
 
 
@@ -241,7 +266,7 @@ class Model:
         #self.gradients = optimizer_task.compute_gradients(self.pol_loss + par['include_val_stab']*self.val_loss)
         delta_reward = self.current_reward - self.previous_reward
         for grad,var in zip(self.delta_grads, self.variables):
-            update_small_omega_ops.append(tf.assign_add(small_omega_var[var.op.name], self.delta_grads[var.op.name]*delta_reward))
+            update_small_omega_ops.append(tf.assign_add(self.small_omega_var[var.op.name], self.delta_grads[var.op.name]*delta_reward))
             update_small_omega_ops.append(tf.assign_add(small_omega_var_div[var.op.name], tf.abs(self.delta_grads[var.op.name]*delta_reward)))
         self.update_small_omega = tf.group(*update_small_omega_ops) # 1) update small_omega after each train!
 
@@ -261,11 +286,10 @@ class Model:
         h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + par['alpha_neuron']*(tf.matmul(x, self.W_in) + \
             tf.matmul(h_post, self.W_rnn) + self.b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
 
-
         return h, syn_x, syn_u
 
 
-    def define_vars(self, reuse):
+    def define_vars(self):
 
         # in TF v1.8, I can use reuse = tf.AUTO_REUSE, and get rid of first weight initialization above
 
@@ -276,36 +300,17 @@ class Model:
         # W_pol_out projects from the RNN onto the policy output neurons
         # W_val_out projects from the RNN onto the value output neuron
 
-        if reuse:
-            with tf.variable_scope('recurrent_pol', reuse = True):
-
-                self.W_in = tf.get_variable('W_in')
-                #self.W_reward_pos = tf.get_variable('W_reward_pos')
-                #self.W_reward_neg = tf.get_variable('W_reward_neg')
-                self.b_rnn = tf.get_variable('b_rnn')
-                self.W_pol_out = tf.get_variable('W_pol_out')
-                self.b_pol_out = tf.get_variable('b_pol_out')
-                #self.W_action = tf.get_variable('W_action')
-                self.W_val_out = tf.get_variable('W_val_out')
-                self.b_val_out = tf.get_variable('b_val_out')
-        else:
-            with tf.variable_scope('recurrent_pol'):
-                self.W_in = tf.get_variable('W_in', initializer = par['W_in_init'])
-                self.b_rnn = tf.get_variable('b_rnn', initializer = par['b_rnn_init'])
-                #self.W_reward_pos = tf.get_variable('W_reward_pos', initializer = par['W_reward_pos_init'])
-                #self.W_reward_neg = tf.get_variable('W_reward_neg', initializer = par['W_reward_neg_init'])
-                self.W_pol_out = tf.get_variable('W_pol_out', initializer = par['W_pol_out_init'])
-                self.b_pol_out = tf.get_variable('b_pol_out', initializer = par['b_pol_out_init'])
-                #self.W_action = tf.get_variable('W_action', initializer = par['W_action_init'])
-                self.W_val_out = tf.get_variable('W_val_out', initializer = par['W_val_out_init'])
-                self.b_val_out = tf.get_variable('b_val_out', initializer = par['b_val_out_init'])
-
-        if reuse:
-            with tf.variable_scope('recurrent_pol', reuse = True):
-                self.W_rnn = tf.get_variable('W_rnn')
-        else:
-            with tf.variable_scope('recurrent_pol'):
-                self.W_rnn = tf.get_variable('W_rnn', initializer = par['W_rnn_init'])
+        with tf.variable_scope('recurrent_pol'):
+            self.W_in = tf.get_variable('W_in', initializer = par['W_in_init'])
+            self.b_rnn = tf.get_variable('b_rnn', initializer = par['b_rnn_init'])
+            #self.W_reward_pos = tf.get_variable('W_reward_pos', initializer = par['W_reward_pos_init'])
+            #self.W_reward_neg = tf.get_variable('W_reward_neg', initializer = par['W_reward_neg_init'])
+            self.W_pol_out = tf.get_variable('W_pol_out', initializer = par['W_pol_out_init'])
+            self.b_pol_out = tf.get_variable('b_pol_out', initializer = par['b_pol_out_init'])
+            #self.W_action = tf.get_variable('W_action', initializer = par['W_action_init'])
+            self.W_val_out = tf.get_variable('W_val_out', initializer = par['W_val_out_init'])
+            self.b_val_out = tf.get_variable('b_val_out', initializer = par['b_val_out_init'])
+            self.W_rnn = tf.get_variable('W_rnn', initializer = par['W_rnn_init'])
 
 
 def main(gpu_id = None):
@@ -390,7 +395,7 @@ def main(gpu_id = None):
                 sess.run([model.reset_rnn_weights])
                 if i%100 == 0:
                     acc = np.mean(np.sum(reward>0,axis=0))
-                    print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'mask', np.mean(stacked_mask))
+                    print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'spike_loss', spike_loss)
 
             # Test all tasks at the end of each learning session
             num_reps = 10
@@ -412,6 +417,8 @@ def main(gpu_id = None):
 
             # Update big omegaes, and reset other values before starting new task
             if par['stabilization'] == 'pathint':
+                sess.run([model.reset_shunted_weights], feed_dict = \
+                    {x:input_data, target: reward_data, gating:par['gating'][task_prime], mask:mk})
                 big_omegas = sess.run([model.update_big_omega, model.big_omega_var])
 
             elif par['stabilization'] == 'EWC':
@@ -426,6 +433,7 @@ def main(gpu_id = None):
             sess.run(model.reset_prev_vars)
             if par['stabilization'] == 'pathint':
                 sess.run(model.reset_small_omega)
+
 
 
 
