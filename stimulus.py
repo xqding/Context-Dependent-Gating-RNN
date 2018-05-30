@@ -117,9 +117,8 @@ class MultiStimulus:
 
         # give -1 for breaking fixation, -0.01/+2 for choosing incorrectly/correctly
         for b in range(par['batch_size']):
-            fix_time = np.where(self.trial_info['desired_output'][:,b,-1] == 1)[0]
-            #respond_time = np.where(np.sum(self.trial_info['desired_output'][:,b,:-1],axis=1) > 0)[0]
-            respond_time = np.where(self.trial_info['desired_output'][:,b,-1] == 0)[0]
+            respond_time = np.where(np.sum(self.trial_info['desired_output'][:,b,:-1],axis = 2) > 0)[0]
+            fix_time = list(range(respond_time[0]))
             correct_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:]==1)[0]
             incorrect_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:-1]==0)[0]
             if b==-1:
