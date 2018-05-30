@@ -16,7 +16,6 @@ global par
 par = {
     # General parameters
     'save_dir'              : './savedir/',
-    'loss_function'         : 'cross_entropy',     # cross_entropy or MSE
     'stabilization'         : 'pathint', # 'EWC' (Kirkpatrick method) or 'pathint' (Zenke method)
     'save_analysis'         : False,
     'reset_weights'         : False,    # reset weights between tasks
@@ -27,38 +26,38 @@ par = {
     'var_delay'             : False,
 
     # Network shape
-    'num_motion_tuned'      : 36,
-    'num_fix_tuned'         : 8,
+    'num_motion_tuned'      : 64,
+    'num_fix_tuned'         : 4,
     'num_rule_tuned'        : 20,
-    'n_hidden'              : 360,
+    'n_hidden'              : 480,
     'n_dendrites'           : 1, # don't use for now
     'n_val'                 : 1,
 
     # Euclidean shape
-    'num_sublayers'         : 2,
+    'num_sublayers'         : 3,
     'neuron_dx'             : 1.0,
     'neuron_dy'             : 1.0,
     'neuron_dz'             : 10.0,
 
     # Timings and rates
     'dt'                    : 20,
-    'learning_rate'         : 4e-3,
+    'learning_rate'         : 2e-3,
     'membrane_time_constant': 100,
     'connection_prob'       : 1.0,
-    'discount_rate'         : 0.,
+    'discount_rate'         : 0.0,
 
     # Variance values
     'clip_max_grad_val'     : 1.0,
     'input_mean'            : 0.0,
     'noise_in_sd'           : 0.,
-    'noise_rnn_sd'          : 0.1,
+    'noise_rnn_sd'          : 0.05,
 
     # Task specs
     'task'                  : 'multistim',
     'n_tasks'               : 20,
-    'multistim_trial_length': 3000,
-    'mask_duration'         : 100,
-    'dead_time'             : 200,
+    'multistim_trial_length': 2500,
+    'mask_duration'         : 200,
+    'dead_time'             : 300,
 
     # Tuning function data
     'num_motion_dirs'       : 8,
@@ -66,9 +65,9 @@ par = {
     'kappa'                 : 2.0,        # concentration scaling factor for von Mises
 
     # Cost parameters
-    'spike_cost'            : 1e-5,
+    'spike_cost'            : 1e-7,
     'weight_cost'           : 0.,
-    'entropy_cost'          : 0.01,
+    'entropy_cost'          : 0.02,
 
     # Synaptic plasticity specs
     'tau_fast'              : 200,
@@ -78,12 +77,12 @@ par = {
 
     # Training specs
     'batch_size'            : 256,
-    'n_train_batches'       : 2000,
+    'n_train_batches'       : 3000,
 
     # Omega parameters
-    'omega_c'               : 1.,
+    'omega_c'               : 0.002,
     'omega_xi'              : 0.01,
-    'EWC_fisher_num_batches': 8,   # number of batches when calculating EWC
+    'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
     'include_val_stab'      : 1., # 1. or 0.
 
     # Gating parameters
@@ -230,7 +229,7 @@ def update_dependencies():
     par['h_init'] = 0.1*np.ones((par['batch_size'], par['n_hidden']), dtype=np.float32)
 
     # Initialize input weights
-    c = 0.2
+    c = 0.05
     if par['EI']:
         par['W_rnn_init'] = c*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
         par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32) - np.eye(par['n_hidden'])
@@ -372,9 +371,10 @@ def update_dependencies():
 
     # even numbers facilitating, odd numbers depressing
     elif par['synapse_config'] == 'std_stf':
-        par['synapse_type'] = np.ones(par['n_hidden'], dtype=np.int8)
-        par['ind'] = range(1,par['n_hidden'],2)
-        par['synapse_type'][par['ind']] = 1
+        par['synapse_type'] = 2*np.ones(par['n_hidden'], dtype=np.int8)
+        ind = range(1,par['n_hidden'],2)
+        #par['synapse_type'][par['ind_inh']] = 1
+        par['synapse_type'][ind] = 1
 
     par['alpha_stf'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
     par['alpha_std'] = np.ones((par['n_hidden'], 1), dtype=np.float32)

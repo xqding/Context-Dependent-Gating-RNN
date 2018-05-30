@@ -89,13 +89,9 @@ class AdamOpt:
 
         return tf.group(*self.update_var_op)
 
-            #grads_and_vars.append([delta_grad, var])
-
-            #return grads_and_vars
-
 
     def apply_gradients(self, grads_and_vars):
-
+        # currently not in use
         for (grad, var) in grads_and_vars:
             if 'W_rnn' in var.op.name:
                 print('Applied W_rnn mask.')
