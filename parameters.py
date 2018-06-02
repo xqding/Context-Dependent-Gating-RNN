@@ -29,19 +29,19 @@ par = {
     'num_motion_tuned'      : 64,
     'num_fix_tuned'         : 4,
     'num_rule_tuned'        : 20,
-    'n_hidden'              : 480,
+    'n_hidden'              : 256,
     'n_dendrites'           : 1, # don't use for now
     'n_val'                 : 1,
 
     # Euclidean shape
-    'num_sublayers'         : 3,
+    'num_sublayers'         : 1,
     'neuron_dx'             : 1.0,
     'neuron_dy'             : 1.0,
     'neuron_dz'             : 10.0,
 
     # Timings and rates
     'dt'                    : 20,
-    'learning_rate'         : 2e-3,
+    'learning_rate'         : 4e-3,
     'membrane_time_constant': 100,
     'connection_prob'       : 1.0,
     'discount_rate'         : 0.0,
@@ -56,7 +56,7 @@ par = {
     'task'                  : 'multistim',
     'n_tasks'               : 20,
     'multistim_trial_length': 2500,
-    'mask_duration'         : 200,
+    'mask_duration'         : 260,
     'dead_time'             : 300,
 
     # Tuning function data
@@ -65,9 +65,9 @@ par = {
     'kappa'                 : 2.0,        # concentration scaling factor for von Mises
 
     # Cost parameters
-    'spike_cost'            : 2e-2,
+    'spike_cost'            : 1e-6,
     'weight_cost'           : 0.,
-    'entropy_cost'          : 0.02,
+    'entropy_cost'          : 0.,
 
     # Synaptic plasticity specs
     'tau_fast'              : 200,
@@ -77,16 +77,16 @@ par = {
 
     # Training specs
     'batch_size'            : 256,
-    'n_train_batches'       : 1000,
+    'n_train_batches'       : 3000,
 
     # Omega parameters
-    'omega_c'               : 0.2,
+    'omega_c'               : 1.,
     'omega_xi'              : 0.01,
     'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
     'include_val_stab'      : 1., # 1. or 0.
 
     # Gating parameters
-    'gating_type'           : None, # 'XdG', 'partial', 'split', None
+    'gating_type'           : 'XdG', # 'XdG', 'partial', 'split', None
     'gate_pct'              : 0.75,  # Num. gated hidden units for 'XdG' only
     'n_subnetworks'         : 4,    # Num. subnetworks for 'split' only
 
@@ -95,7 +95,7 @@ par = {
     'ckpt_save_fn'          : 'model.ckpt',
     'ckpt_load_fn'          : 'model.ckpt',
 
-    'constrain_input_weights': True
+    'constrain_input_weights': False
 
 }
 
@@ -231,7 +231,7 @@ def update_dependencies():
     # Initialize input weights
     c = 0.05
     if par['EI']:
-        par['W_rnn_init'] = c*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
+        par['W_rnn_init'] = 0.05*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
         par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32) - np.eye(par['n_hidden'])
         par['W_rnn_init'] *= par['W_rnn_mask']
     else:
@@ -248,10 +248,15 @@ def update_dependencies():
     #plt.colorbar()
     #plt.show()
 
+    par['reset_weight_mask'] = np.ones((par['n_input'], par['n_hidden']), dtype=np.float32)
+    par['reset_weight_mask'][-par['num_rule_tuned']:,:] = 0.
+
     #par['W_out_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_output']]))
     par['W_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_output']]))
     #par['W_in_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_input'], par['n_hidden']]))
     par['W_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+    par['W_in_init'][-par['num_rule_tuned']:, :] -= 0.5*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['num_rule_tuned'], par['n_hidden']]))
+
     par['b_rnn_init'] = np.zeros((1,par['n_hidden']), dtype = np.float32)
     par['b_out_init'] = np.zeros((1,par['n_output']), dtype = np.float32)
 
@@ -313,6 +318,7 @@ def update_dependencies():
     """
 
 
+
     # Specify connections to sublayers
     for i in range(1, par['num_sublayers']):
         par['W_in_init'][:par['num_motion_tuned']+par['num_fix_tuned'], sublayers[i]] = 0
@@ -332,12 +338,7 @@ def update_dependencies():
             par['W_in_init'][par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned'], i] = 0
             par['W_in_mask'][par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned'], i] = 0
 
-    """
-    # rule tuned only prohject to sublayers[i][2:-1:3]
-    for i in chain(sublayers[k][0:-1:3], sublayers[k][1:-1:3]):
-        par['W_in_init'][-par['num_rule_tuned']:, i] = 0
-        par['W_in_mask'][-par['num_rule_tuned']:, i] = 0
-    """
+
 
 
 

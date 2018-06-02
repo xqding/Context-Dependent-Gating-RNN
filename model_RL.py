@@ -3,7 +3,7 @@ import numpy as np
 import stimulus
 import AdamOpt
 import matplotlib.pyplot as plt
-from parameters import par
+from parameters_RL import par
 from itertools import product
 import os, sys
 
@@ -105,7 +105,11 @@ class Model:
         action = tf.one_hot(tf.squeeze(action_index), par['n_pol'])
         pol_out = tf.nn.softmax(pol_out, dim = 1) # needed for optimize
 
+        """
         val_out = tf.matmul(h, self.W_val_out) + self.b_val_out
+        """
+        val_out0 = tf.nn.relu(tf.matmul(h, self.W_val_out0) + self.b_val_out0)
+        val_out = tf.matmul(val_out0, self.W_val_out1) + self.b_val_out1
 
         # if previous reward was non-zero, then end the trial, unless the new trial signal cue is on
         continue_trial = tf.cast(tf.equal(prev_reward, 0.), tf.float32)
@@ -119,7 +123,9 @@ class Model:
 
         epsilon = 1e-7
         self.variables = [var for var in tf.trainable_variables()]
+        self.variables_val = [var for var in tf.trainable_variables() if 'val' in var.op.name]
         adam_optimizer = AdamOpt.AdamOpt(self.variables, learning_rate = par['learning_rate'])
+        adam_optimizer_val = AdamOpt.AdamOpt(self.variables_val, learning_rate = 10.*par['learning_rate'])
 
         self.previous_weights_mu_minus_1 = {}
         reset_prev_vars_ops = []
@@ -135,23 +141,39 @@ class Model:
 
         self.aux_loss = tf.add_n(aux_losses)
 
-        self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.stack([mask*time_mask*tf.reduce_mean(h) for (h, mask, time_mask) in zip(self.h, self.mask, self.time_mask)]))
+        self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.stack([mask*time_mask*tf.reduce_mean(h) \
+            for (h, mask, time_mask) in zip(self.h, self.mask, self.time_mask)]))
 
-        self.pol_loss = -tf.reduce_mean(tf.stack([advantage*time_mask*mask*act*tf.log((epsilon + pol_out)) \
+        """
+        include_term = [advantage*time_mask*mask*tf.cast(tf.abs(val_out - pred_val) > 0.25, tf.float32) \
+            for (advantage, mask, time_mask,val_out,pred_val) in zip(self.advantage, self.mask, self.time_mask,self.val_out[:-1],self.pred_val[:-1])]
+        self.pol_loss = -tf.reduce_mean(tf.stack([z*act*tf.log((epsilon + pol_out)) \
+            for (pol_out, act, z) in zip(self.pol_out, self.actual_action, include_term)]))
+        """
+        self.pol_loss = -tf.reduce_mean(tf.stack([advantage*time_mask*mask*act*tf.log(epsilon + pol_out) \
             for (pol_out, advantage, act, mask, time_mask) in zip(self.pol_out, self.advantage, \
             self.actual_action, self.mask, self.time_mask)]))
+
 
         self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.stack([tf.reduce_sum(time_mask*mask*pol_out*tf.log(epsilon+pol_out), axis = 1) \
             for (pol_out, mask, time_mask) in zip(self.pol_out, self.mask, self.time_mask)]))
 
+        """
+        # the usual
         self.val_loss = 0.5*tf.reduce_mean(tf.stack([time_mask*mask*tf.square(val_out - pred_val) \
             for (val_out, mask, time_mask, pred_val) in zip(self.val_out[:-1], self.mask, self.time_mask, self.pred_val[1:])]))
+        """
+        # trying this out
+        self.val_loss = 0.01*tf.reduce_mean(tf.stack([time_mask*mask*tf.square(val_out - pred_val) \
+            for (val_out, mask, time_mask, pred_val) in zip(self.val_out[:-1], self.mask, self.time_mask, self.pred_val[:-1])]))
+
 
 
         # Gradient of the loss+aux function, in order to both perform training and to compute delta_weights
         with tf.control_dependencies([self.pol_loss, self.aux_loss, self.spike_loss, self.val_loss]):
             self.train_op = adam_optimizer.compute_gradients(self.pol_loss + self.val_loss + \
                 self.aux_loss + self.spike_loss - self.entropy_loss)
+            self.train_op_val = adam_optimizer_val.compute_gradients(self.val_loss)
 
             #self.train_op = adam_optimizer.apply_gradients(grads_and_vars)
 
@@ -168,7 +190,7 @@ class Model:
         self.reset_adam_op = adam_optimizer.reset_params()
 
         self.make_recurrent_weights_positive()
-        self.reset_zeroed_weights()
+        #self.reset_zeroed_weights()
 
 
 
@@ -185,23 +207,43 @@ class Model:
     def reset_zeroed_weights(self):
 
         th = 1e-3
+        print('th', th)
         reset_shunted_weights = []
         h = tf.stack(self.h)
         mean_h = tf.reshape(tf.reduce_mean(h, axis = (0,1)),[1, par['n_hidden']])
-        mean_h2 = tf.matmul(tf.transpose(mean_h), mean_h)
-
         h_zero = tf.cast(tf.less(mean_h, th), tf.float32)
-        h2_zero = tf.cast(tf.less(mean_h2, th), tf.float32)
+        h2_zero = 1.-tf.matmul(tf.transpose(1.-h_zero), 1.-h_zero)
+        h_in_zero = par['reset_weight_mask']*(tf.tile(h_zero,[par['n_input'], 1]))
+        h_out_zero = tf.tile(tf.transpose(h_zero) ,[1, par['n_pol']])
+
+        self.reset_masks = []
+        #self.reset_masks.append(h_zero)
+        self.reset_masks.append(h2_zero)
+        self.reset_masks.append(h_in_zero)
+        self.reset_masks.append(h_out_zero)
+
+        print('h_zero', h_zero)
+        print('h2_zero', h2_zero)
+        print('h_in_zero', h_in_zero)
+        print('h_out_zero', h_out_zero)
 
         for var in self.variables:
             if 'W_rnn' in var.op.name:
                 reset_shunted_weights.append(tf.assign(var, (1.-h2_zero)*var + \
                     h2_zero*self.previous_weights_mu_minus_1[var.op.name] ))
                 reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h2_zero)*self.small_omega_var[var.op.name]))
-            elif 'b_rnn' in var.op.name:
+            elif 'XXXb_rnnXXXX' in var.op.name:
                 reset_shunted_weights.append(tf.assign(var, (1.-h_zero)*var + \
                     h_zero*self.previous_weights_mu_minus_1[var.op.name] ))
                 reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h_zero)*self.small_omega_var[var.op.name]))
+            elif 'W_in' in var.op.name:
+                reset_shunted_weights.append(tf.assign(var, (1.-h_in_zero)*var + \
+                    h_in_zero*self.previous_weights_mu_minus_1[var.op.name] ))
+                reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h_in_zero)*self.small_omega_var[var.op.name]))
+            elif 'W_pol' in var.op.name:
+                reset_shunted_weights.append(tf.assign(var, (1.-h_out_zero)*var + \
+                    h_out_zero*self.previous_weights_mu_minus_1[var.op.name] ))
+                reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h_out_zero)*self.small_omega_var[var.op.name]))
 
         self.reset_shunted_weights = tf.group(*reset_shunted_weights)
 
@@ -261,9 +303,7 @@ class Model:
         self.reset_small_omega = tf.group(*reset_small_omega_ops)
 
         # This is called every batch
-        #with tf.control_dependencies([self.train_op]):
         self.delta_grads = adam_optimizer.return_delta_grads()
-        #self.gradients = optimizer_task.compute_gradients(self.pol_loss + par['include_val_stab']*self.val_loss)
         delta_reward = self.current_reward - self.previous_reward
         for grad,var in zip(self.delta_grads, self.variables):
             update_small_omega_ops.append(tf.assign_add(self.small_omega_var[var.op.name], self.delta_grads[var.op.name]*delta_reward))
@@ -286,6 +326,14 @@ class Model:
         h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + par['alpha_neuron']*(tf.matmul(x, self.W_in) + \
             tf.matmul(h_post, self.W_rnn) + self.b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
 
+
+        """
+        h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + par['alpha_neuron']*(tf.matmul(x, self.W_in) + \
+            tf.matmul(h_post, self.W_rnn)) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
+        """
+
+
+
         return h, syn_x, syn_u
 
 
@@ -303,14 +351,21 @@ class Model:
         with tf.variable_scope('recurrent_pol'):
             self.W_in = tf.get_variable('W_in', initializer = par['W_in_init'])
             self.b_rnn = tf.get_variable('b_rnn', initializer = par['b_rnn_init'])
+            self.W_rnn = tf.get_variable('W_rnn', initializer = par['W_rnn_init'])
             #self.W_reward_pos = tf.get_variable('W_reward_pos', initializer = par['W_reward_pos_init'])
             #self.W_reward_neg = tf.get_variable('W_reward_neg', initializer = par['W_reward_neg_init'])
             self.W_pol_out = tf.get_variable('W_pol_out', initializer = par['W_pol_out_init'])
             self.b_pol_out = tf.get_variable('b_pol_out', initializer = par['b_pol_out_init'])
             #self.W_action = tf.get_variable('W_action', initializer = par['W_action_init'])
+            """
             self.W_val_out = tf.get_variable('W_val_out', initializer = par['W_val_out_init'])
             self.b_val_out = tf.get_variable('b_val_out', initializer = par['b_val_out_init'])
-            self.W_rnn = tf.get_variable('W_rnn', initializer = par['W_rnn_init'])
+            """
+            self.W_val_out0 = tf.get_variable('W_val_out0', initializer = par['W_val_out0_init'])
+            self.b_val_out0 = tf.get_variable('b_val_out0', initializer = par['b_val_out0_init'])
+            self.W_val_out1 = tf.get_variable('W_val_out1', initializer = par['W_val_out1_init'])
+            self.b_val_out1 = tf.get_variable('b_val_out1', initializer = par['b_val_out1_init'])
+
 
 
 def main(gpu_id = None):
@@ -353,9 +408,10 @@ def main(gpu_id = None):
 
         sess.run(model.reset_prev_vars)
 
-        #for task in range(0, par['n_tasks']):
         for task in range(0, par['n_tasks']):
-
+        #for task in [0,3]:
+            prev_acc = 0.
+            ent_cost = par['entropy_cost'] + 1e-16
             for i in range(par['n_train_batches']):
 
                 # make batch of training data
@@ -371,7 +427,7 @@ def main(gpu_id = None):
                 """
                 Unpack all lists, calculate predicted value and advantage functions
                 """
-                val_out, reward, adv, act, prediected_val, stacked_mask = stack_vars(pol_out_list, val_out_list, reward_list, action_list, mask_list, mk)
+                val_out, reward, adv, act, predicted_val, stacked_mask = stack_vars(pol_out_list, val_out_list, reward_list, action_list, mask_list, mk)
 
 
                 """
@@ -381,21 +437,67 @@ def main(gpu_id = None):
                     _, _, pol_loss, val_loss, aux_loss, spike_loss, ent_loss = sess.run([model.train_op, \
                          model.update_current_reward, model.pol_loss, model.val_loss, model.aux_loss, model.spike_loss, \
                         model.entropy_loss], feed_dict = {x:input_data, target:reward_data, \
-                        gating:par['gating'][task], mask:mk, pred_val: prediected_val, actual_action: act, advantage:adv})
+                        gating:par['gating'][task], mask:mk, pred_val: predicted_val, actual_action: act, advantage:adv})
                     if i>0:
                         sess.run([model.update_small_omega])
                     sess.run([model.update_previous_reward])
 
+                    acc = np.mean(np.sum(reward>0,axis=0))
+                    if acc > -0.999 and prev_acc > 0.999 and aux_loss < 0.0004 + 0.0002*task:
+                        if task == 0:
+                            print(val_out.shape, predicted_val.shape, act.shape)
+                            for k in range(4):
+                                plt.subplot(2,2,1+k)
+                                plt.plot(val_out[:,k,0],'b')
+                                plt.plot(predicted_val[:,k,0],'r')
+                                plt.plot(reward[:,k,0],'g')
+                                plt.plot(stacked_mask[:,k],'k')
+                            plt.show()
+
+
+                        break
+                    prev_acc = acc -1e-16
+
                 elif par['stabilization'] == 'EWC':
                     _, pol_loss,val_loss, aux_loss, spike_loss, ent_loss = sess.run([model.train_op, model.pol_loss, \
                         model.val_loss, model.aux_loss, model.spike_loss, model.entropy_loss], feed_dict = \
-                        {x:input_data, target:reward_data, gating:par['gating'][task], mask:mk, pred_val: prediected_val, \
+                        {x:input_data, target:reward_data, gating:par['gating'][task], mask:mk, pred_val: predicted_val, \
                         actual_action: act, advantage:adv})
 
                 sess.run([model.reset_rnn_weights])
                 if i%100 == 0:
                     acc = np.mean(np.sum(reward>0,axis=0))
+                    #h_stacked = np.stack(h_list, axis = 0)
+                    #above_zero = [np.mean(np.mean(h_stacked, axis = (0,1))>0.01),np.mean(np.mean(h_stacked, axis = (0,1))>0.001),np.mean(np.mean(h_stacked, axis = (0,1))>0.0001)]
+                    #print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'spike_loss', spike_loss, ' h > 0 ', above_zero, 'mean h', np.mean(h_stacked))
                     print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'spike_loss', spike_loss)
+                    """
+                    if i>500 and acc<0.25:
+                        ent_cost + 0.01
+                    elif i>1500 and acc<0.5:
+                        ent_cost + 0.005
+                    else:
+                        ent_cost = par['entropy_cost']+1e-16
+                    """
+
+
+            # Update big omegaes, and reset other values before starting new task
+            if par['stabilization'] == 'pathint':
+                """
+                _, reset_masks = sess.run([model.reset_shunted_weights, model.reset_masks], feed_dict = \
+                    {x:input_data, target: reward_data, gating:par['gating'][task], mask:mk})
+                for i in range(len(reset_masks)):
+                    print('Mean reset masks ', np.mean(reset_masks[i]))
+                """
+                big_omegas = sess.run([model.update_big_omega, model.big_omega_var])
+
+
+            elif par['stabilization'] == 'EWC':
+                for n in range(par['EWC_fisher_num_batches']):
+                    name, input_data, _, mk, reward_data = stim.generate_trial(task_prime)
+                    mk = mk[..., np.newaxis]
+                    big_omegas = sess.run([model.update_big_omega,model.big_omega_var], feed_dict = \
+                        {x:input_data, target: reward_data, gating:par['gating'][task_prime], mask:mk})
 
             # Test all tasks at the end of each learning session
             num_reps = 10
@@ -414,19 +516,6 @@ def main(gpu_id = None):
             print('Accuracy grid after task {}:'.format(task))
             print(accuracy_grid[task,:])
             print('')
-
-            # Update big omegaes, and reset other values before starting new task
-            if par['stabilization'] == 'pathint':
-                sess.run([model.reset_shunted_weights], feed_dict = \
-                    {x:input_data, target: reward_data, gating:par['gating'][task_prime], mask:mk})
-                big_omegas = sess.run([model.update_big_omega, model.big_omega_var])
-
-            elif par['stabilization'] == 'EWC':
-                for n in range(par['EWC_fisher_num_batches']):
-                    name, input_data, _, mk, reward_data = stim.generate_trial(task_prime)
-                    mk = mk[..., np.newaxis]
-                    big_omegas = sess.run([model.update_big_omega,model.big_omega_var], feed_dict = \
-                        {x:input_data, target: reward_data, gating:par['gating'][task_prime], mask:mk})
 
             # Reset the Adam Optimizer, and set the previous parater values to their current values
             sess.run(model.reset_adam_op)
@@ -516,7 +605,8 @@ def print_key_params():
 
     key_info = ['synapse_config','spike_cost','weight_cost','entropy_cost','omega_c','omega_xi',\
         'constrain_input_weights','num_sublayers','n_hidden','noise_rnn_sd','learning_rate',\
-        'discount_rate','include_val_stab','stabilization']
+        'discount_rate','stabilization','gating_type', 'gate_pct',\
+        'fix_break_penalty','wrong_choice_penalty','correct_choice_reward']
     print('Paramater info...')
     for k in key_info:
-        print(k, ' ', par[k])
+        print(k, ': ', par[k])

@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from parameters import *
+#from parameters import par
+from parameters_RL import par
 
 print('Using \'Multistim\' stimulus file.')
 
@@ -23,15 +24,15 @@ class MultiStimulus:
         self.modality_size  = (par['num_motion_tuned'])//2
 
         # DM task stuff
-        self.dm_c_set = np.array([-0.08, -0.04, -0.02, -0.01, 0.01, 0.02, 0.04, 0.08])
+        self.dm_c_set = np.array([-0.08, -0.04, -0.02, -0.01, 0.01, 0.02, 0.04, 0.08])*2.
         self.dm_stim_lengths = np.array([400,800,1600])//par['dt']
 
         # DM Dly task stuff
-        self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])
+        self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])*2.
         self.dm_dly_delay = np.array([100, 200, 400, 800])//par['dt']
 
         # Matching task stuff
-        self.match_delay = np.array([200, 400, 800, 1600])//par['dt']
+        self.match_delay = np.array([100, 200, 400, 800])//par['dt']
 
         # Initialize task interface
         self.get_tasks()
@@ -107,9 +108,9 @@ class MultiStimulus:
 
         self.trial_info['train_mask'][:par['dead_time']//par['dt'], :] = 0
         rule_signal = np.zeros((1,1,par['num_rule_tuned']))
-        rule_signal[0,0,current_task] = 1
+        rule_signal[0,0,current_task] = par['tuning_height']
         if par['num_rule_tuned'] > 0:
-            self.trial_info['neural_input'][:, :, -par['num_rule_tuned']:] += rule_signal
+            self.trial_info['neural_input'][:, :, -par['num_rule_tuned']:] += rule_signal*0.
 
         task = self.task_types[current_task]    # Selects a task from the list
         task[0](*task[1:])                      # Generates that task into trial_info
@@ -131,10 +132,10 @@ class MultiStimulus:
                 print('correct_response ', correct_response)
                 print('incorrect_response ', incorrect_response)
 
-            self.trial_info['reward_data'][fix_time,b,:-1] = -2.
-            self.trial_info['reward_data'][respond_time,b,correct_response] = 10.
+            self.trial_info['reward_data'][fix_time,b,:-1] = par['fix_break_penalty']
+            self.trial_info['reward_data'][respond_time,b,correct_response] = par['correct_choice_reward']
             for i in incorrect_response:
-                self.trial_info['reward_data'][respond_time,b,i] = -1.
+                self.trial_info['reward_data'][respond_time,b,i] = par['wrong_choice_penalty']
         """
         plt.subplot(2,3,1)
         plt.imshow(self.trial_info['desired_output'][:,0,:], aspect = 'auto')
@@ -159,6 +160,7 @@ class MultiStimulus:
 
 
 
+        #self.trial_info['reward_data'] *= 3
         return task[1], self.trial_info['neural_input'], self.trial_info['desired_output'], \
             self.trial_info['train_mask'], self.trial_info['reward_data']
 

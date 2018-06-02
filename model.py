@@ -54,10 +54,7 @@ class Model:
             b_out = tf.get_variable('b_out', initializer=par['b_out_init'], trainable=True)
 
         if par['EI']:
-            W_rnn_eff = tf.matmul(self.W_ei, tf.nn.relu(W_rnn))
-        else:
-            W_rnn_eff = W_rnn
-
+            W_rnn = tf.matmul(self.W_ei, tf.nn.relu(W_rnn))
 
 
         h = tf.constant(par['h_init'])
@@ -96,7 +93,7 @@ class Model:
 
             # Hidden State
             h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + par['alpha_neuron']*(tf.matmul(x, W_in) + \
-                tf.matmul(h_post, W_rnn_eff) + b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
+                tf.matmul(h_post, W_rnn) + b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
 
             #h = tf.minimum(50., h)
 
@@ -134,18 +131,15 @@ class Model:
         self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.square(self.hidden_state_hist))
 
 
-        if par['loss_function'] == 'cross_entropy':
-            self.task_loss = tf.reduce_mean([mask*tf.nn.softmax_cross_entropy_with_logits(logits = y, \
-                labels = target, dim=1) for y, target, mask in zip(self.output, self.target_data, self.mask)])
-        elif par['loss_function'] == 'MSE':
-            self.task_loss = tf.reduce_mean([m*tf.square(y-t) for y, t, m in zip(self.output, self.target_data, self.mask)])
-        else:
-            raise Exception('Invalid loss function identifier.')
+        self.task_loss = tf.reduce_mean([mask*tf.nn.softmax_cross_entropy_with_logits(logits = y, \
+            labels = target, dim=1) for y, target, mask in zip(self.output, self.target_data, self.mask)])
+
 
         output_softmax = [tf.nn.softmax(y, dim = 1) for y in self.output]
         self.entropy_loss = -par['entropy_cost']*tf.reduce_mean([m*tf.reduce_sum(out_sm*tf.log(1e-7+out_sm), axis = 1) \
             for (out_sm,m) in zip(output_softmax, self.mask)])
 
+        """
         with tf.variable_scope('rnn', reuse = True):
             W_in  = tf.get_variable('W_in')
             W_rnn = tf.get_variable('W_rnn')
@@ -153,23 +147,10 @@ class Model:
         active_weights_rnn = tf.matmul(tf.reshape(self.gating,[-1,1]), tf.reshape(self.gating,[1,-1]))
         active_weights_in = tf.tile(tf.reshape(self.gating,[1,-1]),[par['n_input'], 1])
         self.weight_loss = par['weight_cost']*(tf.reduce_mean(active_weights_in*W_in**2) + tf.reduce_mean(tf.nn.relu(active_weights_rnn*W_rnn)**2))
-
+        """
         # Gradient of the loss+aux function, in order to both perform training and to compute delta_weights
-        with tf.control_dependencies([self.task_loss, self.aux_loss, self.spike_loss]):
-            grads_and_vars = adam_optimizer.compute_gradients(self.task_loss + self.aux_loss + self.spike_loss + self.weight_loss - self.entropy_loss)
-
-            for (grad, var) in grads_and_vars:
-                if 'W_rnn' in var.op.name:
-                    print('Applied W_rnn mask.')
-                    grad *= par['W_rnn_mask']
-                elif 'W_in' in var.op.name:
-                    print('Applied W_in mask.')
-                    grad *= par['W_in_mask']
-                elif 'W_out' in var.op.name:
-                    print('Applied W_out mask.')
-                    grad *= par['W_out_mask']
-
-            self.train_op = adam_optimizer.apply_gradients(grads_and_vars)
+        with tf.control_dependencies([self.task_loss, self.aux_loss, self.spike_loss, self.entropy_loss ]):
+            self.train_op = adam_optimizer.compute_gradients(self.task_loss + self.aux_loss + self.spike_loss - self.entropy_loss)
 
         # Stabilizing weights
         if par['stabilization'] == 'pathint':
@@ -222,7 +203,7 @@ class Model:
         opt = tf.train.GradientDescentOptimizer(1)
 
         # model results p(y|x, theta)
-        p_theta = tf.nn.softmax(self.y_hat, dim = 1)
+        p_theta = tf.nn.softmax(self.output, dim = 1)
         # sample label from p(y|x, theta)
         class_ind = tf.multinomial(p_theta, 1)
         class_ind_one_hot = tf.reshape(tf.one_hot(class_ind, par['layer_dims'][-1]), \
@@ -272,7 +253,7 @@ class Model:
             self.update_small_omega = tf.group(*update_small_omega_ops) # 1) update small_omega after each train!
 
 
-def main(save_fn, gpu_id = None):
+def main(save_fn=None, gpu_id = None):
 
     if gpu_id is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
@@ -301,12 +282,15 @@ def main(save_fn, gpu_id = None):
 
 
     key_info = ['synapse_config','spike_cost','weight_cost','entropy_cost','omega_c','omega_xi',\
-        'constrain_input_weights','num_sublayers','n_hidden','noise_rnn_sd','learning_rate']
+        'constrain_input_weights','num_sublayers','n_hidden','noise_rnn_sd','learning_rate','gating_type', 'gate_pct']
     print('Key info')
     for k in key_info:
         print(k, ' ', par[k])
 
-    with tf.Session() as sess:
+    config = tf.ConfigProto()
+    #config.gpu_options.allow_growth = True
+
+    with tf.Session(config=config) as sess:
 
         device = '/cpu:0' if gpu_id is None else '/gpu:0'
         with tf.device(device):
@@ -316,19 +300,21 @@ def main(save_fn, gpu_id = None):
         t_start = time.time()
         sess.run(model.reset_prev_vars)
 
-        for task in range(par['n_tasks']):
+        for task in range(0,par['n_tasks']):
 
             for i in range(par['n_train_batches']):
 
                 # make batch of training data
-                name, stim_in, y_hat, mk = stim.generate_trial(task)
+                name, stim_in, y_hat, mk, _ = stim.generate_trial(task)
 
                 if par['stabilization'] == 'pathint':
-                    _, _, loss, AL, spike_loss, ent_loss, weight_loss, output = sess.run([model.train_op, \
+                    _, _, loss, AL, spike_loss, ent_loss, output = sess.run([model.train_op, \
                         model.update_small_omega, model.task_loss, model.aux_loss, model.spike_loss, \
-                        model.entropy_loss, model.weight_loss, model.output], \
+                        model.entropy_loss, model.output], \
                         feed_dict = {x:stim_in, target:y_hat, gating:par['gating'][task], mask:mk})
                     sess.run([model.reset_rnn_weights])
+                    if loss < 0.005 and AL < 0.0004 + 0.0002*task:
+                        break
 
                 elif par['stabilization'] == 'EWC':
                     _, loss, AL = sess.run([model.train_op, model.task_loss, model.aux_loss], feed_dict = \
@@ -337,7 +323,7 @@ def main(save_fn, gpu_id = None):
                 if i%100 == 0:
                     acc = get_perf(y_hat, output, mk)
                     print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' loss ', loss, ' aux loss', AL, ' spike loss', spike_loss, \
-                        ' entropy loss', ent_loss, ' weight loss', weight_loss)
+                        ' entropy loss', ent_loss)
 
 
             # Test all tasks at the end of each learning session
@@ -345,7 +331,7 @@ def main(save_fn, gpu_id = None):
             for (task_prime, r) in product(range(task+1), range(num_reps)):
 
                 # make batch of training data
-                name, stim_in, y_hat, mk = stim.generate_trial(task_prime)
+                name, stim_in, y_hat, mk, _ = stim.generate_trial(task_prime)
 
                 output,_ = sess.run([model.output, model.syn_x_hist], feed_dict = {x:stim_in, gating:par['gating'][task_prime]})
                 acc = get_perf(y_hat, output, mk)
@@ -360,7 +346,7 @@ def main(save_fn, gpu_id = None):
                 big_omegas = sess.run([model.update_big_omega, model.big_omega_var])
             elif par['stabilization'] == 'EWC':
                 for n in range(par['EWC_fisher_num_batches']):
-                    stim_in, y_hat, mk = stim.make_batch(task, test = False)
+                    name, stim_in, y_hat, mk, _ = stim.generate_trial(task)
                     big_omegas = sess.run([model.update_big_omega,model.big_omega_var], feed_dict = \
                         {x:stim_in, target:y_hat, gating:par['gating'][task], mask:mk})
 
