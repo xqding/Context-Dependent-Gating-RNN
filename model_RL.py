@@ -2,10 +2,11 @@ import tensorflow as tf
 import numpy as np
 import stimulus
 import AdamOpt
+import pickle
 import matplotlib.pyplot as plt
 from parameters_RL import par
 from itertools import product
-import os, sys
+import os, sys, time
 
 # Ignore "use compiled version of TensorFlow" errors
 os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
@@ -18,16 +19,18 @@ Model setup and execution
 """
 class Model:
 
-    def __init__(self, input_data, target_data, gating, pred_val, actual_action, advantage, mask):
+    def __init__(self, input_data, target_data, gating, val_gating, pred_val, actual_action, advantage, mask, explore_prob):
 
         # Load the input activity, the target data, and the training mask for this batch of trials
         self.input_data = tf.unstack(input_data, axis=0)
         self.target_data = tf.unstack(target_data, axis=0)
         self.gating = tf.reshape(gating, [1,-1])
+        self.val_gating = tf.reshape(val_gating, [1,-1])
         self.pred_val = tf.unstack(pred_val, axis=0)
         self.actual_action = tf.unstack(actual_action, axis=0)
         self.advantage = tf.unstack(advantage, axis=0)
         self.W_ei = tf.constant(par['EI_matrix'])
+        self.explore_prob = explore_prob
 
         self.time_mask = tf.unstack(mask, axis=0)
 
@@ -101,15 +104,14 @@ class Model:
 
         # calculate the policy output and choose an action
         pol_out = tf.matmul(h, self.W_pol_out) + self.b_pol_out
+        #random_exp = tf.random_uniform(shape = (par['batch_size'], 1))
+        #random_exp = tf.cast(random_exp > self.explore_prob, tf.float32)
+        #pol_out_exp = pol_out*random_exp
+
         action_index = tf.multinomial(pol_out, 1)
         action = tf.one_hot(tf.squeeze(action_index), par['n_pol'])
-        pol_out = tf.nn.softmax(pol_out, dim = 1) # needed for optimize
-
-        """
+        pol_out= tf.nn.softmax(pol_out, dim = 1) # needed for optimize
         val_out = tf.matmul(h, self.W_val_out) + self.b_val_out
-        """
-        val_out0 = tf.nn.relu(tf.matmul(h, self.W_val_out0) + self.b_val_out0)
-        val_out = tf.matmul(val_out0, self.W_val_out1) + self.b_val_out1
 
         # if previous reward was non-zero, then end the trial, unless the new trial signal cue is on
         continue_trial = tf.cast(tf.equal(prev_reward, 0.), tf.float32)
@@ -123,9 +125,9 @@ class Model:
 
         epsilon = 1e-7
         self.variables = [var for var in tf.trainable_variables()]
-        self.variables_val = [var for var in tf.trainable_variables() if 'val' in var.op.name]
+        #self.variables_val = [var for var in tf.trainable_variables() if 'val' in var.op.name]
         adam_optimizer = AdamOpt.AdamOpt(self.variables, learning_rate = par['learning_rate'])
-        adam_optimizer_val = AdamOpt.AdamOpt(self.variables_val, learning_rate = 10.*par['learning_rate'])
+        #adam_optimizer_val = AdamOpt.AdamOpt(self.variables_val, learning_rate = 10.*par['learning_rate'])
 
         self.previous_weights_mu_minus_1 = {}
         reset_prev_vars_ops = []
@@ -135,8 +137,10 @@ class Model:
         for var in self.variables:
             self.big_omega_var[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
             self.previous_weights_mu_minus_1[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
-            aux_losses.append(par['omega_c']*tf.reduce_sum(tf.multiply(self.big_omega_var[var.op.name], \
-               tf.square(self.previous_weights_mu_minus_1[var.op.name] - var) )))
+            if not 'val' in var.op.name:
+                # don't stabilizae the value weights or biases
+                aux_losses.append(par['omega_c']*tf.reduce_sum(tf.multiply(self.big_omega_var[var.op.name], \
+                    tf.square(self.previous_weights_mu_minus_1[var.op.name] - var) )))
             reset_prev_vars_ops.append( tf.assign(self.previous_weights_mu_minus_1[var.op.name], var ) )
 
         self.aux_loss = tf.add_n(aux_losses)
@@ -144,12 +148,7 @@ class Model:
         self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.stack([mask*time_mask*tf.reduce_mean(h) \
             for (h, mask, time_mask) in zip(self.h, self.mask, self.time_mask)]))
 
-        """
-        include_term = [advantage*time_mask*mask*tf.cast(tf.abs(val_out - pred_val) > 0.25, tf.float32) \
-            for (advantage, mask, time_mask,val_out,pred_val) in zip(self.advantage, self.mask, self.time_mask,self.val_out[:-1],self.pred_val[:-1])]
-        self.pol_loss = -tf.reduce_mean(tf.stack([z*act*tf.log((epsilon + pol_out)) \
-            for (pol_out, act, z) in zip(self.pol_out, self.actual_action, include_term)]))
-        """
+
         self.pol_loss = -tf.reduce_mean(tf.stack([advantage*time_mask*mask*act*tf.log(epsilon + pol_out) \
             for (pol_out, advantage, act, mask, time_mask) in zip(self.pol_out, self.advantage, \
             self.actual_action, self.mask, self.time_mask)]))
@@ -158,13 +157,8 @@ class Model:
         self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.stack([tf.reduce_sum(time_mask*mask*pol_out*tf.log(epsilon+pol_out), axis = 1) \
             for (pol_out, mask, time_mask) in zip(self.pol_out, self.mask, self.time_mask)]))
 
-        """
-        # the usual
+
         self.val_loss = 0.5*tf.reduce_mean(tf.stack([time_mask*mask*tf.square(val_out - pred_val) \
-            for (val_out, mask, time_mask, pred_val) in zip(self.val_out[:-1], self.mask, self.time_mask, self.pred_val[1:])]))
-        """
-        # trying this out
-        self.val_loss = 0.01*tf.reduce_mean(tf.stack([time_mask*mask*tf.square(val_out - pred_val) \
             for (val_out, mask, time_mask, pred_val) in zip(self.val_out[:-1], self.mask, self.time_mask, self.pred_val[:-1])]))
 
 
@@ -173,9 +167,7 @@ class Model:
         with tf.control_dependencies([self.pol_loss, self.aux_loss, self.spike_loss, self.val_loss]):
             self.train_op = adam_optimizer.compute_gradients(self.pol_loss + self.val_loss + \
                 self.aux_loss + self.spike_loss - self.entropy_loss)
-            self.train_op_val = adam_optimizer_val.compute_gradients(self.val_loss)
 
-            #self.train_op = adam_optimizer.apply_gradients(grads_and_vars)
 
         # Stabilizing weights
         if par['stabilization'] == 'pathint':
@@ -203,50 +195,6 @@ class Model:
                 reset_weights.append(tf.assign(var,tf.maximum(1e-9, var)))
 
         self.reset_rnn_weights = tf.group(*reset_weights)
-
-    def reset_zeroed_weights(self):
-
-        th = 1e-3
-        print('th', th)
-        reset_shunted_weights = []
-        h = tf.stack(self.h)
-        mean_h = tf.reshape(tf.reduce_mean(h, axis = (0,1)),[1, par['n_hidden']])
-        h_zero = tf.cast(tf.less(mean_h, th), tf.float32)
-        h2_zero = 1.-tf.matmul(tf.transpose(1.-h_zero), 1.-h_zero)
-        h_in_zero = par['reset_weight_mask']*(tf.tile(h_zero,[par['n_input'], 1]))
-        h_out_zero = tf.tile(tf.transpose(h_zero) ,[1, par['n_pol']])
-
-        self.reset_masks = []
-        #self.reset_masks.append(h_zero)
-        self.reset_masks.append(h2_zero)
-        self.reset_masks.append(h_in_zero)
-        self.reset_masks.append(h_out_zero)
-
-        print('h_zero', h_zero)
-        print('h2_zero', h2_zero)
-        print('h_in_zero', h_in_zero)
-        print('h_out_zero', h_out_zero)
-
-        for var in self.variables:
-            if 'W_rnn' in var.op.name:
-                reset_shunted_weights.append(tf.assign(var, (1.-h2_zero)*var + \
-                    h2_zero*self.previous_weights_mu_minus_1[var.op.name] ))
-                reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h2_zero)*self.small_omega_var[var.op.name]))
-            elif 'XXXb_rnnXXXX' in var.op.name:
-                reset_shunted_weights.append(tf.assign(var, (1.-h_zero)*var + \
-                    h_zero*self.previous_weights_mu_minus_1[var.op.name] ))
-                reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h_zero)*self.small_omega_var[var.op.name]))
-            elif 'W_in' in var.op.name:
-                reset_shunted_weights.append(tf.assign(var, (1.-h_in_zero)*var + \
-                    h_in_zero*self.previous_weights_mu_minus_1[var.op.name] ))
-                reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h_in_zero)*self.small_omega_var[var.op.name]))
-            elif 'W_pol' in var.op.name:
-                reset_shunted_weights.append(tf.assign(var, (1.-h_out_zero)*var + \
-                    h_out_zero*self.previous_weights_mu_minus_1[var.op.name] ))
-                reset_shunted_weights.append(tf.assign(self.small_omega_var[var.op.name], (1.-h_out_zero)*self.small_omega_var[var.op.name]))
-
-        self.reset_shunted_weights = tf.group(*reset_shunted_weights)
-
 
     def EWC(self):
 
@@ -292,6 +240,7 @@ class Model:
             self.small_omega_var[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
             small_omega_var_div[var.op.name] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
             reset_small_omega_ops.append( tf.assign(self.small_omega_var[var.op.name], self.small_omega_var[var.op.name]*0.0 ) )
+
             update_big_omega_ops.append( tf.assign_add( self.big_omega_var[var.op.name], tf.div(tf.abs(self.small_omega_var[var.op.name]), \
             	(par['omega_xi'] + small_omega_var_div[var.op.name]))))
 
@@ -327,19 +276,10 @@ class Model:
             tf.matmul(h_post, self.W_rnn) + self.b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
 
 
-        """
-        h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + par['alpha_neuron']*(tf.matmul(x, self.W_in) + \
-            tf.matmul(h_post, self.W_rnn)) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
-        """
-
-
-
         return h, syn_x, syn_u
 
 
     def define_vars(self):
-
-        # in TF v1.8, I can use reuse = tf.AUTO_REUSE, and get rid of first weight initialization above
 
         # W_in0, and W_in1 are feedforward weights whose input is the convolved image, and projects onto the RNN
         # W_reward_pos, W_reward_neg project the postive and negative part of the reward from the previous time point onto the RNN
@@ -357,18 +297,14 @@ class Model:
             self.W_pol_out = tf.get_variable('W_pol_out', initializer = par['W_pol_out_init'])
             self.b_pol_out = tf.get_variable('b_pol_out', initializer = par['b_pol_out_init'])
             #self.W_action = tf.get_variable('W_action', initializer = par['W_action_init'])
-            """
+
             self.W_val_out = tf.get_variable('W_val_out', initializer = par['W_val_out_init'])
             self.b_val_out = tf.get_variable('b_val_out', initializer = par['b_val_out_init'])
-            """
-            self.W_val_out0 = tf.get_variable('W_val_out0', initializer = par['W_val_out0_init'])
-            self.b_val_out0 = tf.get_variable('b_val_out0', initializer = par['b_val_out0_init'])
-            self.W_val_out1 = tf.get_variable('W_val_out1', initializer = par['W_val_out1_init'])
-            self.b_val_out1 = tf.get_variable('b_val_out1', initializer = par['b_val_out1_init'])
 
 
 
-def main(gpu_id = None):
+
+def main(gpu_id = None, save_fn = 'test.pkl'):
 
     if gpu_id is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
@@ -382,13 +318,12 @@ def main(gpu_id = None):
     Create the stimulus class to generate trial paramaters and input activity
     """
     stim = stimulus.MultiStimulus()
-    accuracy_full = []
-    accuracy_grid = np.zeros((par['n_tasks'], par['n_tasks']))
+
 
     """
     Define all placeholder
     """
-    x, target, mask, pred_val, actual_action, advantage, mask, gating = generate_placeholders()
+    x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, explore_prob = generate_placeholders()
 
     config = tf.ConfigProto()
     #config.gpu_options.allow_growth=True
@@ -399,20 +334,31 @@ def main(gpu_id = None):
 
         device = '/cpu:0' if gpu_id is None else '/gpu:0'
         with tf.device(device):
-            model = Model(x, target, gating, pred_val, actual_action, advantage, mask)
+            model = Model(x, target, gating, val_gating, pred_val, actual_action, advantage, mask, explore_prob)
 
         sess.run(tf.global_variables_initializer())
 
         # keep track of the model performance across training
-        model_performance = {'reward': [], 'entropy_loss': [], 'val_loss': [], 'pol_loss': [], 'spike_loss': [], 'trial': []}
+        model_performance = {'reward': [], 'entropy_loss': [], 'val_loss': [], 'pol_loss': [], 'spike_loss': [], 'trial': [], 'task': []}
+        reward_matrix = np.zeros((par['n_tasks'], par['n_tasks']))
+        accuracy_full = []
 
         sess.run(model.reset_prev_vars)
 
         for task in range(0, par['n_tasks']):
         #for task in [0,3]:
-            prev_acc = 0.
-            ent_cost = par['entropy_cost'] + 1e-16
+            accuracy_above_threshold = 0
+
+            task_start_time = time.time()
+
             for i in range(par['n_train_batches']):
+
+                if i < -1:
+                    xp = 0.02
+                elif i < -1:
+                    xp = 0.01
+                else:
+                    xp = 0.
 
                 # make batch of training data
                 name, input_data, _, mk, reward_data = stim.generate_trial(task)
@@ -422,13 +368,12 @@ def main(gpu_id = None):
                 Run the model
                 """
                 pol_out_list, val_out_list, h_list, action_list, mask_list, reward_list = sess.run([model.pol_out, model.val_out, model.h, model.action, \
-                    model.mask, model.reward], {x: input_data, target: reward_data, mask: mk, gating:par['gating'][task]})
+                    model.mask, model.reward], {x: input_data, target: reward_data, mask: mk, gating:par['gating'][task], val_gating:par['val_gating'][task], explore_prob: xp})
 
                 """
                 Unpack all lists, calculate predicted value and advantage functions
                 """
                 val_out, reward, adv, act, predicted_val, stacked_mask = stack_vars(pol_out_list, val_out_list, reward_list, action_list, mask_list, mk)
-
 
                 """
                 Calculate and apply gradients
@@ -437,48 +382,31 @@ def main(gpu_id = None):
                     _, _, pol_loss, val_loss, aux_loss, spike_loss, ent_loss = sess.run([model.train_op, \
                          model.update_current_reward, model.pol_loss, model.val_loss, model.aux_loss, model.spike_loss, \
                         model.entropy_loss], feed_dict = {x:input_data, target:reward_data, \
-                        gating:par['gating'][task], mask:mk, pred_val: predicted_val, actual_action: act, advantage:adv})
+                        gating:par['gating'][task], val_gating:par['val_gating'][task], mask:mk, pred_val: predicted_val, actual_action: act, advantage:adv, explore_prob: xp})
                     if i>0:
                         sess.run([model.update_small_omega])
                     sess.run([model.update_previous_reward])
 
-                    acc = np.mean(np.sum(reward>0,axis=0))
-                    if acc > -0.999 and prev_acc > 0.999 and aux_loss < 0.0004 + 0.0002*task:
-                        if task == 0:
-                            print(val_out.shape, predicted_val.shape, act.shape)
-                            for k in range(4):
-                                plt.subplot(2,2,1+k)
-                                plt.plot(val_out[:,k,0],'b')
-                                plt.plot(predicted_val[:,k,0],'r')
-                                plt.plot(reward[:,k,0],'g')
-                                plt.plot(stacked_mask[:,k],'k')
-                            plt.show()
 
 
-                        break
-                    prev_acc = acc -1e-16
 
                 elif par['stabilization'] == 'EWC':
                     _, pol_loss,val_loss, aux_loss, spike_loss, ent_loss = sess.run([model.train_op, model.pol_loss, \
                         model.val_loss, model.aux_loss, model.spike_loss, model.entropy_loss], feed_dict = \
-                        {x:input_data, target:reward_data, gating:par['gating'][task], mask:mk, pred_val: predicted_val, \
-                        actual_action: act, advantage:adv})
+                        {x:input_data, target:reward_data, gating:par['gating'][task], val_gating:par['val_gating'][task], mask:mk, pred_val: predicted_val, \
+                        actual_action: act, advantage:adv, explore_prob: xp})
+
+                acc = np.mean(np.sum(reward>0,axis=0))
+                if acc > 0.99:
+                    accuracy_above_threshold += 1
+                if accuracy_above_threshold >= 3000:
+                    break
 
                 sess.run([model.reset_rnn_weights])
-                if i%100 == 0:
-                    acc = np.mean(np.sum(reward>0,axis=0))
-                    #h_stacked = np.stack(h_list, axis = 0)
-                    #above_zero = [np.mean(np.mean(h_stacked, axis = (0,1))>0.01),np.mean(np.mean(h_stacked, axis = (0,1))>0.001),np.mean(np.mean(h_stacked, axis = (0,1))>0.0001)]
+                if i%1000 == 0:
                     #print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'spike_loss', spike_loss, ' h > 0 ', above_zero, 'mean h', np.mean(h_stacked))
-                    print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'spike_loss', spike_loss)
-                    """
-                    if i>500 and acc<0.25:
-                        ent_cost + 0.01
-                    elif i>1500 and acc<0.5:
-                        ent_cost + 0.005
-                    else:
-                        ent_cost = par['entropy_cost']+1e-16
-                    """
+                    print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'time ', np.around(time.time() - task_start_time))
+
 
 
             # Update big omegaes, and reset other values before starting new task
@@ -494,27 +422,30 @@ def main(gpu_id = None):
 
             elif par['stabilization'] == 'EWC':
                 for n in range(par['EWC_fisher_num_batches']):
-                    name, input_data, _, mk, reward_data = stim.generate_trial(task_prime)
+                    name, input_data, _, mk, reward_data = stim.generate_trial(task)
                     mk = mk[..., np.newaxis]
                     big_omegas = sess.run([model.update_big_omega,model.big_omega_var], feed_dict = \
-                        {x:input_data, target: reward_data, gating:par['gating'][task_prime], mask:mk})
+                        {x:input_data, target: reward_data, gating:par['gating'][task], mask:mk})
 
             # Test all tasks at the end of each learning session
             num_reps = 10
-            for (task_prime, r) in product(range(task+1), range(num_reps)):
+            for (task_prime, r) in product(range(par['n_tasks']), range(num_reps)):
 
                 # make batch of training data
                 name, input_data, _, mk, reward_data = stim.generate_trial(task_prime)
                 mk = mk[..., np.newaxis]
 
                 reward_list = sess.run([model.reward], feed_dict = {x:input_data, target: reward_data, \
-                    gating:par['gating'][task_prime], mask:mk})
+                    gating:par['gating'][task_prime], mask:mk, explore_prob: 0.})
                 # TODO: figure out what's with the extra dimension at index 0 in reward
                 reward = np.squeeze(np.stack(reward_list))
-                accuracy_grid[task,task_prime] += np.mean(np.sum(reward>0,axis=0))/num_reps
+                reward_matrix[task,task_prime] += np.mean(np.sum(reward>0,axis=0))/num_reps
 
             print('Accuracy grid after task {}:'.format(task))
-            print(accuracy_grid[task,:])
+            print(reward_matrix[task,:])
+            results = {'reward_matrix': reward_matrix, 'par': par}
+            pickle.dump(results, open(par['save_dir'] + save_fn, 'wb') )
+            print('Analysis results saved in ', save_fn)
             print('')
 
             # Reset the Adam Optimizer, and set the previous parater values to their current values
@@ -522,6 +453,8 @@ def main(gpu_id = None):
             sess.run(model.reset_prev_vars)
             if par['stabilization'] == 'pathint':
                 sess.run(model.reset_small_omega)
+
+
 
 
 
@@ -565,8 +498,10 @@ def generate_placeholders():
     actual_action = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_pol']])
     advantage  = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_val']])
     gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
+    val_gating = tf.placeholder(tf.float32, [par['n_val_hidden']], 'gating')
+    explore_prob = tf.placeholder(tf.float32, [], 'explore_prob')
 
-    return x, target, mask, pred_val, actual_action, advantage, mask, gating
+    return x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, explore_prob
 
 def eval_weights():
 
@@ -605,8 +540,8 @@ def print_key_params():
 
     key_info = ['synapse_config','spike_cost','weight_cost','entropy_cost','omega_c','omega_xi',\
         'constrain_input_weights','num_sublayers','n_hidden','noise_rnn_sd','learning_rate',\
-        'discount_rate','stabilization','gating_type', 'gate_pct',\
-        'fix_break_penalty','wrong_choice_penalty','correct_choice_reward']
+        'discount_rate', 'mask_duration', 'stabilization','gating_type', 'gate_pct',\
+        'fix_break_penalty','wrong_choice_penalty','correct_choice_reward','include_rule_signal']
     print('Paramater info...')
     for k in key_info:
         print(k, ': ', par[k])

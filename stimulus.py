@@ -24,11 +24,11 @@ class MultiStimulus:
         self.modality_size  = (par['num_motion_tuned'])//2
 
         # DM task stuff
-        self.dm_c_set = np.array([-0.08, -0.04, -0.02, -0.01, 0.01, 0.02, 0.04, 0.08])*2.
+        self.dm_c_set = np.array([-0.08, -0.04, -0.02, -0.01, 0.01, 0.02, 0.04, 0.08])*4.
         self.dm_stim_lengths = np.array([400,800,1600])//par['dt']
 
         # DM Dly task stuff
-        self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])*2.
+        self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])*4.
         self.dm_dly_delay = np.array([100, 200, 400, 800])//par['dt']
 
         # Matching task stuff
@@ -39,11 +39,18 @@ class MultiStimulus:
         self.task_id = 0
         self.task_order = np.arange(len(self.task_types))
 
+        self.rule_signal_factor = 1. if par['include_rule_signal'] else 0.
+
 
     def circ_tuning(self, theta):
-        return par['tuning_height'] * np.exp(par['kappa'] \
-             * np.cos(theta-self.stimulus_dirs[:,np.newaxis])) \
-             / np.exp(par['kappa'])
+
+        #return np.maximum(0, par['tuning_height']*(np.exp(par['kappa']*np.cos(theta-self.stimulus_dirs[:,np.newaxis])) - 1)/np.exp(par['kappa']))
+
+        ang_dist = np.angle(np.exp(1j*theta - 1j*self.stimulus_dirs[:,np.newaxis]))
+        return par['tuning_height']*np.exp(-0.5*(8*ang_dist/np.pi)**2)
+
+
+
 
 
     def get_tasks(self):
@@ -107,10 +114,11 @@ class MultiStimulus:
             'train_mask'     : np.ones(self.mask_shape, dtype=np.float32)}
 
         self.trial_info['train_mask'][:par['dead_time']//par['dt'], :] = 0
-        rule_signal = np.zeros((1,1,par['num_rule_tuned']))
-        rule_signal[0,0,current_task] = par['tuning_height']
+
         if par['num_rule_tuned'] > 0:
-            self.trial_info['neural_input'][:, :, -par['num_rule_tuned']:] += rule_signal*0.
+            rule_signal = np.zeros((1,1,par['num_rule_tuned']))
+            rule_signal[0,0,current_task] = par['tuning_height']
+            self.trial_info['neural_input'][:, :, -par['num_rule_tuned']:] += rule_signal*self.rule_signal_factor
 
         task = self.task_types[current_task]    # Selects a task from the list
         task[0](*task[1:])                      # Generates that task into trial_info
@@ -218,7 +226,6 @@ class MultiStimulus:
         stim_dir1 = np.random.choice(self.motion_dirs, [1, par['batch_size']])
         stim_dir2 = (stim_dir1 + np.pi/2 + np.random.choice(self.motion_dirs[::2], [1, par['batch_size']])/2)%(2*np.pi)
 
-
         stim1 = self.circ_tuning(stim_dir1)
         stim2 = self.circ_tuning(stim_dir2)
 
@@ -274,7 +281,7 @@ class MultiStimulus:
 
         resp = np.zeros([par['num_motion_dirs'], par['batch_size']])
         for b in range(par['batch_size']):
-            resp[np.int8(resp_dirs[0,b]%8),b] = 1
+            resp[np.int8(resp_dirs[0,b]%par['num_motion_dirs']),b] = 1
 
         # Setting up arrays
         fixation = np.zeros(self.fixation_shape)
@@ -387,7 +394,7 @@ class MultiStimulus:
 
         resp = np.zeros([par['num_motion_dirs'], par['batch_size']])
         for b in range(par['batch_size']):
-            resp[np.int8(resp_dirs[0,b]%8),b] = 1
+            resp[np.int8(resp_dirs[0,b]%par['num_motion_dirs']),b] = 1
 
         # Setting up arrays
         fixation = np.zeros(self.fixation_shape)

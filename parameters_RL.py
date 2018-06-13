@@ -30,6 +30,7 @@ par = {
     'num_fix_tuned'         : 4,
     'num_rule_tuned'        : 0,
     'n_hidden'              : 500,
+    'n_d_hidden'            : 100, # distill hidden neurons
     'n_val_hidden'          : 200,
     'n_dendrites'           : 1, # don't use for now
     'n_val'                 : 1,
@@ -67,7 +68,7 @@ par = {
     'kappa'                 : 2.0,        # concentration scaling factor for von Mises
 
     # Cost parameters
-    'spike_cost'            : 1e-7,
+    'spike_cost'            : 1e-5,
     'weight_cost'           : 0.,
     'entropy_cost'          : 0.01,
 
@@ -243,6 +244,7 @@ def update_dependencies():
     ####################################################################
 
     par['h_init'] = 0.5*np.ones((par['batch_size'], par['n_hidden']), dtype=np.float32)
+    par['h_d_init'] = 0.5*np.ones((par['batch_size'], par['n_d_hidden']), dtype=np.float32)
 
     # Initialize input weights
     c = 0.05
@@ -250,6 +252,10 @@ def update_dependencies():
         par['W_rnn_init'] = 0.05*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
         par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32) - np.eye(par['n_hidden'])
         par['W_rnn_init'] *= par['W_rnn_mask']
+
+        par['W_d_rnn_init'] = 0.05*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_d_hidden'], par['n_d_hidden']]))
+        par['W_d_rnn_mask'] = np.ones((par['n_d_hidden'], par['n_d_hidden']), dtype=np.float32) - np.eye(par['n_d_hidden'])
+        par['W_d_rnn_init'] *= par['W_d_rnn_mask']
     else:
         par['W_rnn_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))
         par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32)
@@ -269,11 +275,14 @@ def update_dependencies():
 
     #par['W_out_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_output']]))
     par['W_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_output']]))
+
     #par['W_in_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_input'], par['n_hidden']]))
     par['W_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+    par['W_d_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_d_hidden']]))
     #par['W_in_init'][-par['num_rule_tuned']:, :] -= 0.5*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['num_rule_tuned'], par['n_hidden']]))
 
     par['b_rnn_init'] = np.zeros((1,par['n_hidden']), dtype = np.float32)
+    par['b_d_rnn_init'] = np.zeros((1,par['n_d_hidden']), dtype = np.float32)
     par['b_out_init'] = np.zeros((1,par['n_output']), dtype = np.float32)
 
     par['W_out_mask'] = np.ones((par['n_hidden'], par['n_output']), dtype=np.float32)
@@ -286,6 +295,8 @@ def update_dependencies():
     # RL
     par['W_pol_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_pol']]))
     par['b_pol_out_init'] = np.zeros((1,par['n_pol']), dtype = np.float32)
+    par['W_d_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_d_hidden'], par['n_pol']]))
+
 
     par['W_val_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_val']]))
     par['b_val_out_init'] = np.zeros((1,par['n_val']), dtype = np.float32)

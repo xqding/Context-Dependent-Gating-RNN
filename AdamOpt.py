@@ -82,6 +82,9 @@ class AdamOpt:
             elif 'W_in' in var.op.name:
                 print('Applied W_in mask.')
                 delta_grad *= par['W_in_mask']
+            elif 'W_d_rnn' in var.op.name:
+                print('Applied W_d_rnn mask.')
+                delta_grad *= par['W_d_rnn_mask']
             elif 'W_out' in var.op.name:
                 print('Applied W_out mask.')
                 delta_grad *= par['W_out_mask']
