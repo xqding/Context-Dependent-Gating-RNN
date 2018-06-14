@@ -296,6 +296,7 @@ def update_dependencies():
     par['W_pol_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_pol']]))
     par['b_pol_out_init'] = np.zeros((1,par['n_pol']), dtype = np.float32)
     par['W_d_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_d_hidden'], par['n_pol']]))
+    par['b_d_out_init'] = np.float32(np.random.uniform(-c, c, size = [1, par['n_pol']]))
 
 
     par['W_val_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_val']]))
