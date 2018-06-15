@@ -19,7 +19,7 @@ Model setup and execution
 """
 class Model:
 
-    def __init__(self, input_data, target_data, gating, val_gating, pred_val, actual_action, advantage, mask, drop_mask):
+    def __init__(self, input_data, target_data, gating, val_gating, pred_val, actual_action, advantage, mask, drop_mask, entropy_cost):
 
         # Load the input activity, the target data, and the training mask for this batch of trials
         self.input_data = tf.unstack(input_data, axis=0)
@@ -31,6 +31,7 @@ class Model:
         self.advantage = tf.unstack(advantage, axis=0)
         self.W_ei = tf.constant(par['EI_matrix'])
         self.drop_mask = drop_mask
+        self.entropy_cost = entropy_cost
 
         self.time_mask = tf.unstack(mask, axis=0)
 
@@ -65,7 +66,7 @@ class Model:
         """
         self.define_vars()
 
-        h = tf.constant(par['h_init'])
+        h = self.drop_mask*tf.constant(par['h_init'])
         syn_x = tf.constant(par['syn_x_init'])
         syn_u = tf.constant(par['syn_u_init'])
 
@@ -154,7 +155,7 @@ class Model:
             self.actual_action, self.mask, self.time_mask)]))
 
 
-        self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.stack([tf.reduce_sum(time_mask*mask*pol_out*tf.log(epsilon+pol_out), axis = 1) \
+        self.entropy_loss = -self.entropy_cost*tf.reduce_mean(tf.stack([tf.reduce_sum(time_mask*mask*pol_out*tf.log(epsilon+pol_out), axis = 1) \
             for (pol_out, mask, time_mask) in zip(self.pol_out, self.mask, self.time_mask)]))
 
 
@@ -272,7 +273,7 @@ class Model:
         else:
             h_post = h
 
-        h = self.drop_mask*self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + par['alpha_neuron']*(tf.matmul(x, self.W_in) + \
+        h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + self.drop_mask*par['alpha_neuron']*(tf.matmul(x, self.W_in) + \
             tf.matmul(h_post, self.W_rnn) + self.b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
 
 
@@ -323,7 +324,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
     """
     Define all placeholder
     """
-    x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, drop_mask = generate_placeholders()
+    x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, drop_mask, entropy_cost = generate_placeholders()
 
     config = tf.ConfigProto()
     #config.gpu_options.allow_growth=True
@@ -334,7 +335,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
 
         device = '/cpu:0' if gpu_id is None else '/gpu:0'
         with tf.device(device):
-            model = Model(x, target, gating, val_gating, pred_val, actual_action, advantage, mask, drop_mask)
+            model = Model(x, target, gating, val_gating, pred_val, actual_action, advantage, mask, drop_mask, entropy_cost)
 
         sess.run(tf.global_variables_initializer())
 
@@ -353,8 +354,12 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
 
             for i in range(par['n_train_batches']):
 
-                dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [0.25, 0.75]))
-                #dm /= np.mean(dm, axis = 1, keepdims = True)
+                dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [par['drop_rate'], 1-par['drop_rate']]))
+                dm /= np.mean(dm, axis = 1, keepdims = True)
+
+                #ec = np.minimum(par['entropy_cost'], par['entropy_cost']*i/2000)
+                ec = par['entropy_cost']
+
 
                 # make batch of training data
                 name, input_data, _, mk, reward_data = stim.generate_trial(task)
@@ -365,7 +370,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 """
                 pol_out_list, val_out_list, h_list, action_list, mask_list, reward_list = sess.run([model.pol_out, model.val_out, model.h, model.action, \
                     model.mask, model.reward], {x: input_data, target: reward_data, mask: mk, gating:par['gating'][task], \
-                    val_gating:par['val_gating'][task], drop_mask: dm})
+                    val_gating:par['val_gating'][task], drop_mask: dm, entropy_cost:ec})
 
                 """
                 Unpack all lists, calculate predicted value and advantage functions
@@ -380,7 +385,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                          model.update_current_reward, model.pol_loss, model.val_loss, model.aux_loss, model.spike_loss, \
                         model.entropy_loss], feed_dict = {x:input_data, target:reward_data, \
                         gating:par['gating'][task], val_gating:par['val_gating'][task], mask:mk, pred_val: predicted_val, actual_action: act, \
-                        advantage:adv, drop_mask: dm})
+                        advantage:adv, drop_mask: dm, entropy_cost:ec})
                     if i>0:
                         sess.run([model.update_small_omega])
                     sess.run([model.update_previous_reward])
@@ -392,17 +397,17 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                     _, pol_loss,val_loss, aux_loss, spike_loss, ent_loss = sess.run([model.train_op, model.pol_loss, \
                         model.val_loss, model.aux_loss, model.spike_loss, model.entropy_loss], feed_dict = \
                         {x:input_data, target:reward_data, gating:par['gating'][task], val_gating:par['val_gating'][task], mask:mk, pred_val: predicted_val, \
-                        actual_action: act, advantage:adv, drop_mask: dm})
+                        actual_action: act, advantage:adv, drop_mask: dm, entropy_cost:ec})
 
                 acc = np.mean(np.sum(reward>0,axis=0))
                 if acc > 0.99:
                     accuracy_above_threshold += 1
-                if accuracy_above_threshold >= 300:
+                if accuracy_above_threshold >= 300 and i >= 2000:
                     print('Accuracy above threshold occured 300 times')
                     break
 
                 sess.run([model.reset_rnn_weights])
-                if i%100 == 0:
+                if i%500 == 0:
                     #print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'spike_loss', spike_loss, ' h > 0 ', above_zero, 'mean h', np.mean(h_stacked))
                     print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'time ', np.around(time.time() - task_start_time))
 
@@ -424,7 +429,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                     name, input_data, _, mk, reward_data = stim.generate_trial(task)
                     mk = mk[..., np.newaxis]
                     big_omegas = sess.run([model.update_big_omega,model.big_omega_var], feed_dict = \
-                        {x:input_data, target: reward_data, gating:par['gating'][task], mask:mk})
+                        {x:input_data, target: reward_data, gating:par['gating'][task], mask:mk, entropy_cost:ec})
 
             # Test all tasks at the end of each learning session
             num_reps = 10
@@ -433,7 +438,8 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 # make batch of training data
                 name, input_data, _, mk, reward_data = stim.generate_trial(task_prime)
                 mk = mk[..., np.newaxis]
-                dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [0.25, 0.75]))
+                dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [par['drop_rate'], 1-par['drop_rate']]))
+                dm /= np.mean(dm, axis = 1, keepdims = True)
 
                 reward_list = sess.run([model.reward], feed_dict = {x:input_data, target: reward_data, \
                     gating:par['gating'][task_prime], mask:mk, drop_mask: dm})
@@ -500,8 +506,9 @@ def generate_placeholders():
     gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
     val_gating = tf.placeholder(tf.float32, [par['n_val_hidden']], 'gating')
     drop_mask = tf.placeholder(tf.float32,[par['batch_size'], par['n_hidden']], 'drop_mask')
+    entropy_cost = tf.placeholder(tf.float32, [], 'entropy_cost')
 
-    return x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, drop_mask
+    return x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, drop_mask, entropy_cost
 
 def eval_weights():
 
@@ -540,7 +547,7 @@ def print_key_params():
 
     key_info = ['synapse_config','spike_cost','weight_cost','entropy_cost','omega_c','omega_xi',\
         'constrain_input_weights','num_sublayers','n_hidden','noise_rnn_sd','learning_rate',\
-        'discount_rate', 'mask_duration', 'stabilization','gating_type', 'gate_pct',\
+        'discount_rate', 'mask_duration', 'stabilization','gating_type', 'gate_pct','drop_rate',\
         'fix_break_penalty','wrong_choice_penalty','correct_choice_reward','include_rule_signal']
     print('Paramater info...')
     for k in key_info:

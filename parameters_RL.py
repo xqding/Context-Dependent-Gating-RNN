@@ -71,6 +71,7 @@ par = {
     'spike_cost'            : 1e-6,
     'weight_cost'           : 0.,
     'entropy_cost'          : 0.01,
+    'drop_rate'             : 0.3,
 
     # Synaptic plasticity specs
     'tau_fast'              : 200,
@@ -89,7 +90,7 @@ par = {
 
     # Gating parameters
     'gating_type'           : 'XdG', # 'XdG', 'partial', 'split', None
-    'gate_pct'              : 0.75,  # Num. gated hidden units for 'XdG' only
+    'gate_pct'              : 0.8,  # Num. gated hidden units for 'XdG' only
     'n_subnetworks'         : 4,    # Num. subnetworks for 'split' only
 
     # Stimulus parameters
@@ -249,7 +250,7 @@ def update_dependencies():
     # Initialize input weights
     c = 0.05
     if par['EI']:
-        par['W_rnn_init'] = 0.1*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
+        par['W_rnn_init'] = 0.05*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
         par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32) - np.eye(par['n_hidden'])
         par['W_rnn_init'] *= par['W_rnn_mask']
 
