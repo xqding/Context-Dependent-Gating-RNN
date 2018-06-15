@@ -19,7 +19,7 @@ Model setup and execution
 """
 class Model:
 
-    def __init__(self, input_data, target_data, gating, val_gating, pred_val, actual_action, advantage, mask, explore_prob):
+    def __init__(self, input_data, target_data, gating, val_gating, pred_val, actual_action, advantage, mask, drop_mask):
 
         # Load the input activity, the target data, and the training mask for this batch of trials
         self.input_data = tf.unstack(input_data, axis=0)
@@ -30,7 +30,7 @@ class Model:
         self.actual_action = tf.unstack(actual_action, axis=0)
         self.advantage = tf.unstack(advantage, axis=0)
         self.W_ei = tf.constant(par['EI_matrix'])
-        self.explore_prob = explore_prob
+        self.drop_mask = drop_mask
 
         self.time_mask = tf.unstack(mask, axis=0)
 
@@ -272,7 +272,7 @@ class Model:
         else:
             h_post = h
 
-        h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + par['alpha_neuron']*(tf.matmul(x, self.W_in) + \
+        h = self.drop_mask*self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + par['alpha_neuron']*(tf.matmul(x, self.W_in) + \
             tf.matmul(h_post, self.W_rnn) + self.b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
 
 
@@ -323,7 +323,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
     """
     Define all placeholder
     """
-    x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, explore_prob = generate_placeholders()
+    x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, drop_mask = generate_placeholders()
 
     config = tf.ConfigProto()
     #config.gpu_options.allow_growth=True
@@ -334,7 +334,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
 
         device = '/cpu:0' if gpu_id is None else '/gpu:0'
         with tf.device(device):
-            model = Model(x, target, gating, val_gating, pred_val, actual_action, advantage, mask, explore_prob)
+            model = Model(x, target, gating, val_gating, pred_val, actual_action, advantage, mask, drop_mask)
 
         sess.run(tf.global_variables_initializer())
 
@@ -353,12 +353,8 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
 
             for i in range(par['n_train_batches']):
 
-                if i < -1:
-                    xp = 0.02
-                elif i < -1:
-                    xp = 0.01
-                else:
-                    xp = 0.
+                dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [0.25, 0.75]))
+                #dm /= np.mean(dm, axis = 1, keepdims = True)
 
                 # make batch of training data
                 name, input_data, _, mk, reward_data = stim.generate_trial(task)
@@ -368,7 +364,8 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 Run the model
                 """
                 pol_out_list, val_out_list, h_list, action_list, mask_list, reward_list = sess.run([model.pol_out, model.val_out, model.h, model.action, \
-                    model.mask, model.reward], {x: input_data, target: reward_data, mask: mk, gating:par['gating'][task], val_gating:par['val_gating'][task], explore_prob: xp})
+                    model.mask, model.reward], {x: input_data, target: reward_data, mask: mk, gating:par['gating'][task], \
+                    val_gating:par['val_gating'][task], drop_mask: dm})
 
                 """
                 Unpack all lists, calculate predicted value and advantage functions
@@ -382,7 +379,8 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                     _, _, pol_loss, val_loss, aux_loss, spike_loss, ent_loss = sess.run([model.train_op, \
                          model.update_current_reward, model.pol_loss, model.val_loss, model.aux_loss, model.spike_loss, \
                         model.entropy_loss], feed_dict = {x:input_data, target:reward_data, \
-                        gating:par['gating'][task], val_gating:par['val_gating'][task], mask:mk, pred_val: predicted_val, actual_action: act, advantage:adv, explore_prob: xp})
+                        gating:par['gating'][task], val_gating:par['val_gating'][task], mask:mk, pred_val: predicted_val, actual_action: act, \
+                        advantage:adv, drop_mask: dm})
                     if i>0:
                         sess.run([model.update_small_omega])
                     sess.run([model.update_previous_reward])
@@ -394,16 +392,17 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                     _, pol_loss,val_loss, aux_loss, spike_loss, ent_loss = sess.run([model.train_op, model.pol_loss, \
                         model.val_loss, model.aux_loss, model.spike_loss, model.entropy_loss], feed_dict = \
                         {x:input_data, target:reward_data, gating:par['gating'][task], val_gating:par['val_gating'][task], mask:mk, pred_val: predicted_val, \
-                        actual_action: act, advantage:adv, explore_prob: xp})
+                        actual_action: act, advantage:adv, drop_mask: dm})
 
                 acc = np.mean(np.sum(reward>0,axis=0))
                 if acc > 0.99:
                     accuracy_above_threshold += 1
-                if accuracy_above_threshold >= 3000:
+                if accuracy_above_threshold >= 300:
+                    print('Accuracy above threshold occured 300 times')
                     break
 
                 sess.run([model.reset_rnn_weights])
-                if i%1000 == 0:
+                if i%100 == 0:
                     #print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'spike_loss', spike_loss, ' h > 0 ', above_zero, 'mean h', np.mean(h_stacked))
                     print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'time ', np.around(time.time() - task_start_time))
 
@@ -434,9 +433,10 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 # make batch of training data
                 name, input_data, _, mk, reward_data = stim.generate_trial(task_prime)
                 mk = mk[..., np.newaxis]
+                dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [0.25, 0.75]))
 
                 reward_list = sess.run([model.reward], feed_dict = {x:input_data, target: reward_data, \
-                    gating:par['gating'][task_prime], mask:mk, explore_prob: 0.})
+                    gating:par['gating'][task_prime], mask:mk, drop_mask: dm})
                 # TODO: figure out what's with the extra dimension at index 0 in reward
                 reward = np.squeeze(np.stack(reward_list))
                 reward_matrix[task,task_prime] += np.mean(np.sum(reward>0,axis=0))/num_reps
@@ -499,9 +499,9 @@ def generate_placeholders():
     advantage  = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_val']])
     gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
     val_gating = tf.placeholder(tf.float32, [par['n_val_hidden']], 'gating')
-    explore_prob = tf.placeholder(tf.float32, [], 'explore_prob')
+    drop_mask = tf.placeholder(tf.float32,[par['batch_size'], par['n_hidden']], 'drop_mask')
 
-    return x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, explore_prob
+    return x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, drop_mask
 
 def eval_weights():
 
