@@ -24,12 +24,13 @@ par = {
     'synapse_config'        : 'std_stf',     # Full is 'std_stf'
     'exc_inh_prop'          : 0.8,      # Literature 0.8, for EI off 1
     'var_delay'             : False,
+    'LSTM'                  : True,
 
     # Network shape
     'num_motion_tuned'      : 64,
     'num_fix_tuned'         : 4,
     'num_rule_tuned'        : 0,
-    'n_hidden'              : 500,
+    'n_hidden'              : 256,
     'n_d_hidden'            : 100, # distill hidden neurons
     'n_val_hidden'          : 200,
     'n_dendrites'           : 1, # don't use for now
@@ -53,7 +54,7 @@ par = {
     'clip_max_grad_val'     : 1.0,
     'input_mean'            : 0.0,
     'noise_in_sd'           : 0.0,
-    'noise_rnn_sd'          : 0.0,
+    'noise_rnn_sd'          : 0.05,
 
     # Task specs
     'task'                  : 'multistim',
@@ -68,14 +69,14 @@ par = {
     'kappa'                 : 2.0,        # concentration scaling factor for von Mises
 
     # Cost parameters
-    'spike_cost'            : 1e-6,
+    'spike_cost'            : 1e-7,
     'weight_cost'           : 0.,
-    'entropy_cost'          : 0.01,
-    'drop_rate'             : 0.25,
+    'entropy_cost'          : 0.005,
+    'drop_rate'             : 0.2,
 
     # Synaptic plasticity specs
-    'tau_fast'              : 200,
-    'tau_slow'              : 1500,
+    'tau_fast'              : 100,
+    'tau_slow'              : 1000,
     'U_stf'                 : 0.15,
     'U_std'                 : 0.45,
 
@@ -201,6 +202,14 @@ def update_dependencies():
     Updates all parameter dependencies
     """
 
+    if par['exc_inh_prop'] < 1 and not par['LSTM']:
+        par['EI'] = True
+    elif par['LSTM']:
+        print('Using LSTM networks; setting to EI to False')
+        par['EI'] = False
+        par['exc_inh_prop'] = 1.
+        par['synapse_config'] = False
+
     # Number of output neurons
     par['n_output'] = par['num_motion_dirs'] + 1
     par['n_pol'] = par['num_motion_dirs'] + 1
@@ -223,11 +232,13 @@ def update_dependencies():
 
     par['num_exc_units'] = int(np.round(par['n_hidden']*par['exc_inh_prop']))
     par['num_inh_units'] = par['n_hidden'] - par['num_exc_units']
-    n = par['n_hidden']//par['num_inh_units']
-    par['ind_inh'] = np.arange(n-1,par['n_hidden'],n)
     par['EI_list'] = np.ones(par['n_hidden'], dtype=np.float32)
-    par['EI_list'][par['ind_inh']] = -1.
+    if par['EI']:
+        n = par['n_hidden']//par['num_inh_units']
+        par['ind_inh'] = np.arange(n-1,par['n_hidden'],n)
+        par['EI_list'][par['ind_inh']] = -1.
     par['EI_matrix'] = np.diag(par['EI_list'])
+
 
     # Membrane time constant of RNN neurons
     par['alpha_neuron'] = np.float32(par['dt'])/par['membrane_time_constant']
@@ -244,13 +255,13 @@ def update_dependencies():
     ### Setting up assorted intial weights, biases, and other values ###
     ####################################################################
 
-    par['h_init'] = 0.5*np.ones((par['batch_size'], par['n_hidden']), dtype=np.float32)
-    par['h_d_init'] = 0.5*np.ones((par['batch_size'], par['n_d_hidden']), dtype=np.float32)
+    par['h_init'] = 0.1*np.ones((par['batch_size'], par['n_hidden']), dtype=np.float32)
+    par['h_d_init'] = 0.1*np.ones((par['batch_size'], par['n_d_hidden']), dtype=np.float32)
 
     # Initialize input weights
-    c = 0.05
+    c = 0.1
     if par['EI']:
-        par['W_rnn_init'] = 0.05*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
+        par['W_rnn_init'] = c*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
         par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32) - np.eye(par['n_hidden'])
         par['W_rnn_init'] *= par['W_rnn_mask']
 
@@ -264,7 +275,7 @@ def update_dependencies():
     if par['synapse_config'] == None:
         par['W_rnn_init'] /= (spectral_radius(par['W_rnn_init'])/2)
     """
-    par['W_rnn_init'][par['ind_inh'], :] *= 4
+    #par['W_rnn_init'][par['ind_inh'],: ] *= 4
 
     #s = np.dot(par['EI_matrix'], par['W_rnn_init'])
     #plt.imshow(s, aspect = 'auto')
@@ -278,8 +289,9 @@ def update_dependencies():
     par['W_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_output']]))
 
     #par['W_in_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_input'], par['n_hidden']]))
-    par['W_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
-    par['W_d_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_d_hidden']]))
+    #par['W_in_init'] = np.float32(np.random.uniform(-0.25, 0.25, size = [par['n_input'], par['n_hidden']]))
+    par['W_in_init'] = c*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_input'], par['n_hidden']]))
+    #par['W_d_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_d_hidden']]))
     #par['W_in_init'][-par['num_rule_tuned']:, :] -= 0.5*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['num_rule_tuned'], par['n_hidden']]))
 
     par['b_rnn_init'] = np.zeros((1,par['n_hidden']), dtype = np.float32)
@@ -302,6 +314,26 @@ def update_dependencies():
 
     par['W_val_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_val']]))
     par['b_val_out_init'] = np.zeros((1,par['n_val']), dtype = np.float32)
+
+
+    if par['LSTM']:
+        c = 0.05
+        par['Wf_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wi_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wo_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wc_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+
+        par['Uf_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))
+        par['Ui_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))
+        par['Uo_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))
+        par['Uc_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))
+
+
+        par['bf_init'] = np.zeros((1, par['n_hidden']), dtype = np.float32)
+        par['bi_init'] = np.zeros((1, par['n_hidden']), dtype = np.float32)
+        par['bo_init'] = np.zeros((1, par['n_hidden']), dtype = np.float32)
+        par['bc_init'] = np.zeros((1, par['n_hidden']), dtype = np.float32)
+
     """
     par['W_val_out0_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_val_hidden']]))
     #par['W_act_val_out0_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_pol'], par['n_val_hidden']]))

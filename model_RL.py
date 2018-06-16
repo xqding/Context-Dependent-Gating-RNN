@@ -67,6 +67,7 @@ class Model:
         self.define_vars()
 
         h = self.drop_mask*tf.constant(par['h_init'])
+        c = self.drop_mask*tf.constant(par['h_init'])
         syn_x = tf.constant(par['syn_x_init'])
         syn_u = tf.constant(par['syn_u_init'])
 
@@ -76,7 +77,7 @@ class Model:
         """
         for rnn_input, target, time_mask in zip(self.input_data, self.target_data, self.time_mask):
 
-            h, syn_x, syn_u, action, pol_out, val_out, mask, reward  = self.rnn_cell(rnn_input, h, syn_x, syn_u, \
+            h, c, syn_x, syn_u, action, pol_out, val_out, mask, reward  = self.rnn_cell(rnn_input, h, c, syn_x, syn_u, \
                 self.reward[-1], self.mask[-1], target, time_mask)
 
             self.h.append(h)
@@ -93,7 +94,7 @@ class Model:
         self.reward = self.reward[1:]
 
 
-    def rnn_cell(self, x, h, syn_x, syn_u, prev_reward, mask, target, time_mask):
+    def rnn_cell(self, x, h, c, syn_x, syn_u, prev_reward, mask, target, time_mask):
 
         #self.define_vars(reuse = True)
 
@@ -101,7 +102,7 @@ class Model:
         if par['EI']:
             self.W_rnn = tf.matmul(self.W_ei, tf.nn.relu(self.W_rnn))
 
-        h, syn_x, syn_u = self.recurrent_cell(h, syn_x, syn_u, x)
+        h, c, syn_x, syn_u = self.recurrent_cell(h, c, syn_x, syn_u, x)
 
         # calculate the policy output and choose an action
         pol_out = tf.matmul(h, self.W_pol_out) + self.b_pol_out
@@ -111,7 +112,7 @@ class Model:
 
         action_index = tf.multinomial(pol_out, 1)
         action = tf.one_hot(tf.squeeze(action_index), par['n_pol'])
-        pol_out= tf.nn.softmax(pol_out, dim = 1) # needed for optimize
+        pol_out = tf.nn.softmax(pol_out, dim = 1) # needed for optimize
         val_out = tf.matmul(h, self.W_val_out) + self.b_val_out
 
         # if previous reward was non-zero, then end the trial, unless the new trial signal cue is on
@@ -119,7 +120,7 @@ class Model:
         mask *= continue_trial
         reward = tf.reduce_sum(action*target, axis = 1, keep_dims = True)*mask*time_mask
 
-        return h, syn_x, syn_u, action, pol_out, val_out, mask, reward
+        return h, c, syn_x, syn_u, action, pol_out, val_out, mask, reward
 
 
     def optimize(self):
@@ -262,22 +263,40 @@ class Model:
 
 
 
-    def recurrent_cell(self, h, syn_x, syn_u, x):
+    def recurrent_cell(self, h, c, syn_x, syn_u, x):
 
-        if par['synapse_config'] == 'std_stf':
-            syn_x += par['alpha_std']*(1-syn_x) - par['dt_sec']*syn_u*syn_x*h
-            syn_u += par['alpha_stf']*(par['U']-syn_u) + par['dt_sec']*par['U']*(1-syn_u)*h
-            syn_x = tf.minimum(np.float32(1), tf.nn.relu(syn_x))
-            syn_u = tf.minimum(np.float32(1), tf.nn.relu(syn_u))
-            h_post = syn_u*syn_x*h
+        if par['LSTM']:
+            # forgetting gate
+            f = tf.sigmoid(tf.matmul(x, self.Wf) + tf.matmul(h, self.Uf) + self.bf)
+            # input gate
+            i = tf.sigmoid(tf.matmul(x, self.Wi) + tf.matmul(h, self.Ui) + self.bi)
+            # updated cell state
+            cn = tf.tanh(tf.matmul(x, self.Wc) + tf.matmul(h, self.Uc) + self.bc)
+            c = tf.multiply(f, c) + tf.multiply(i, cn)
+            # output gate
+            o = tf.sigmoid(tf.matmul(x, self.Wo) + tf.matmul(h, self.Uo) + self.bo)
+
+            h = self.drop_mask*self.gating*tf.multiply(o, tf.tanh(c))
+            syn_x = tf.constant(-1.)
+            syn_u = tf.constant(-1.)
+
         else:
-            h_post = h
 
-        h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h + self.drop_mask*par['alpha_neuron']*(tf.matmul(x, self.W_in) + \
-            tf.matmul(h_post, self.W_rnn) + self.b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
+            if par['synapse_config'] == 'std_stf':
+                syn_x += par['alpha_std']*(1-syn_x) - par['dt_sec']*syn_u*syn_x*h
+                syn_u += par['alpha_stf']*(par['U']-syn_u) + par['dt_sec']*par['U']*(1-syn_u)*h
+                syn_x = tf.minimum(np.float32(1), tf.nn.relu(syn_x))
+                syn_u = tf.minimum(np.float32(1), tf.nn.relu(syn_u))
+                h_post = syn_u*syn_x*h
+            else:
+                h_post = h
+
+            h = self.drop_mask*self.gating*tf.nn.relu((1-par['alpha_neuron'])*h +par['alpha_neuron']*(tf.matmul(x, tf.nn.relu(self.W_in)) + \
+                tf.matmul(h_post, self.W_rnn) + self.b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
+            c = tf.constant(-1.)
 
 
-        return h, syn_x, syn_u
+        return h, c, syn_x, syn_u
 
 
     def define_vars(self):
@@ -290,17 +309,35 @@ class Model:
         # W_val_out projects from the RNN onto the value output neuron
 
         with tf.variable_scope('recurrent_pol'):
-            self.W_in = tf.get_variable('W_in', initializer = par['W_in_init'])
-            self.b_rnn = tf.get_variable('b_rnn', initializer = par['b_rnn_init'])
-            self.W_rnn = tf.get_variable('W_rnn', initializer = par['W_rnn_init'])
-            #self.W_reward_pos = tf.get_variable('W_reward_pos', initializer = par['W_reward_pos_init'])
-            #self.W_reward_neg = tf.get_variable('W_reward_neg', initializer = par['W_reward_neg_init'])
+            if par['LSTM']:
+            # following conventions on https://en.wikipedia.org/wiki/Long_short-term_memory
+                self.Wf = tf.get_variable('Wf', initializer = par['Wf_init'])
+                self.Wi = tf.get_variable('Wi', initializer = par['Wi_init'])
+                self.Wo = tf.get_variable('Wo', initializer = par['Wo_init'])
+                self.Wc = tf.get_variable('Wc', initializer = par['Wc_init'])
+
+                self.Uf = tf.get_variable('Uf', initializer = par['Ui_init'])
+                self.Ui = tf.get_variable('Ui', initializer = par['Ui_init'])
+                self.Uo = tf.get_variable('Uo', initializer = par['Uo_init'])
+                self.Uc = tf.get_variable('Uc', initializer = par['Uc_init'])
+
+                self.bf = tf.get_variable('bf', initializer = par['bf_init'])
+                self.bi = tf.get_variable('bi', initializer = par['bi_init'])
+                self.bo = tf.get_variable('bo', initializer = par['bo_init'])
+                self.bc = tf.get_variable('bc', initializer = par['bc_init'])
+
+            else:
+                self.W_in = tf.get_variable('W_in', initializer = par['W_in_init'])
+                self.b_rnn = tf.get_variable('b_rnn', initializer = par['b_rnn_init'])
+                self.W_rnn = tf.get_variable('W_rnn', initializer = par['W_rnn_init'])
+
+
             self.W_pol_out = tf.get_variable('W_pol_out', initializer = par['W_pol_out_init'])
             self.b_pol_out = tf.get_variable('b_pol_out', initializer = par['b_pol_out_init'])
-            #self.W_action = tf.get_variable('W_action', initializer = par['W_action_init'])
-
             self.W_val_out = tf.get_variable('W_val_out', initializer = par['W_val_out_init'])
             self.b_val_out = tf.get_variable('b_val_out', initializer = par['b_val_out_init'])
+
+
 
 
 
@@ -351,11 +388,27 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
             accuracy_above_threshold = 0
 
             task_start_time = time.time()
+            gate_ind = np.where(par['gating'][task]>0)[0]
+            M1 = round(par['n_hidden']*(1-par['gate_pct'])*(1-par['drop_rate']))
+            M0 = round(par['n_hidden']*(1-par['gate_pct'])*(par['drop_rate']))
+            drop_vect = np.int8(np.vstack((np.ones((M1, 1)), np.zeros((M0, 1)))))
 
             for i in range(par['n_train_batches']):
 
-                dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [par['drop_rate'], 1-par['drop_rate']]))
-                dm /= np.mean(dm, axis = 1, keepdims = True)
+                dm = np.zeros((par['batch_size'], par['n_hidden']), dtype = np.float32)
+                for m in range(par['batch_size']):
+                    ind = np.random.permutation(gate_ind)[:M1]
+                    dm[m, ind] = 1
+
+                #print(np.sum(dm,axis=1))
+                #plt.imshow(dm, aspect = 'auto')
+                #plt.colorbar()
+                #plt.show()
+
+                #drop_ind = np.random.choice(gate_ind, par['batch_size'], replace = False)
+
+                #dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [par['drop_rate'], 1-par['drop_rate']]))
+                #dm /= np.mean(par['gating'][task]*dm, axis = 1, keepdims = True)/(1-par['gate_pct'])/(1-par['drop_rate'])
 
                 #ec = np.minimum(par['entropy_cost'], par['entropy_cost']*i/2000)
                 ec = par['entropy_cost']
@@ -409,7 +462,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 sess.run([model.reset_rnn_weights])
                 if i%500 == 0:
                     #print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'spike_loss', spike_loss, ' h > 0 ', above_zero, 'mean h', np.mean(h_stacked))
-                    print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'time ', np.around(time.time() - task_start_time))
+                    print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'mean h', np.mean(np.stack(h_list)), 'time ', np.around(time.time() - task_start_time))
 
 
 
@@ -438,8 +491,12 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 # make batch of training data
                 name, input_data, _, mk, reward_data = stim.generate_trial(task_prime)
                 mk = mk[..., np.newaxis]
-                dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [par['drop_rate'], 1-par['drop_rate']]))
-                dm /= np.mean(dm, axis = 1, keepdims = True)
+                #dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [par['drop_rate'], 1-par['drop_rate']]))
+                #dm /= np.mean(dm, axis = 1, keepdims = True)
+                dm = np.zeros((par['batch_size'], par['n_hidden']), dtype = np.float32)
+                for m in range(par['batch_size']):
+                    ind = np.random.permutation(gate_ind)[:int(len(gate_ind)*(1-par['drop_rate']))]
+                    dm[m, ind] = 1
 
                 reward_list = sess.run([model.reward], feed_dict = {x:input_data, target: reward_data, \
                     gating:par['gating'][task_prime], mask:mk, drop_mask: dm})

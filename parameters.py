@@ -25,6 +25,7 @@ par = {
     'exc_inh_prop'          : 0.8,      # Literature 0.8, for EI off 1
     'var_delay'             : False,
 
+
     # Network shape
     'num_motion_tuned'      : 64,
     'num_fix_tuned'         : 4,
@@ -231,7 +232,7 @@ def update_dependencies():
     # Initialize input weights
     c = 0.05
     if par['EI']:
-        par['W_rnn_init'] = 0.05*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
+        par['W_rnn_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
         par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32) - np.eye(par['n_hidden'])
         par['W_rnn_init'] *= par['W_rnn_mask']
     else:
@@ -241,7 +242,7 @@ def update_dependencies():
     if par['synapse_config'] == None:
         par['W_rnn_init'] /= (spectral_radius(par['W_rnn_init'])/2)
     """
-    par['W_rnn_init'][par['ind_inh'], :] *= 4
+    #par['W_rnn_init'][par['ind_inh'], :] *= 4
 
     #s = np.dot(par['EI_matrix'], par['W_rnn_init'])
     #plt.imshow(s, aspect = 'auto')
@@ -254,8 +255,9 @@ def update_dependencies():
     #par['W_out_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_output']]))
     par['W_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_output']]))
     #par['W_in_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_input'], par['n_hidden']]))
-    par['W_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
-    par['W_in_init'][-par['num_rule_tuned']:, :] -= 0.5*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['num_rule_tuned'], par['n_hidden']]))
+    #par['W_in_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+    par['W_in_init'] = np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_input'], par['n_hidden']]))
+
 
     par['b_rnn_init'] = np.zeros((1,par['n_hidden']), dtype = np.float32)
     par['b_out_init'] = np.zeros((1,par['n_output']), dtype = np.float32)
@@ -272,6 +274,7 @@ def update_dependencies():
     par['W_val_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_val']]))
     par['b_pol_out_init'] = np.zeros((1,par['n_pol']), dtype = np.float32)
     par['b_val_out_init'] = np.zeros((1,par['n_val']), dtype = np.float32)
+
 
 
     # Defining sublayers for the hidden layer

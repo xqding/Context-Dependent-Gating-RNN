@@ -173,6 +173,7 @@ class MultiStimulus:
 
 
 
+
         #self.trial_info['reward_data'] *= 3
         return task[1], self.trial_info['neural_input'], self.trial_info['desired_output'], \
             self.trial_info['train_mask'], self.trial_info['reward_data']
