@@ -23,16 +23,21 @@ class MultiStimulus:
         self.stimulus_dirs  = np.linspace(0,2*np.pi-2*np.pi/(par['num_motion_tuned']//2),(par['num_motion_tuned']//2))
         self.modality_size  = (par['num_motion_tuned'])//2
 
+        self.fix_time = 400
+
+        # Go task stuff
+        self.go_delay = np.array([200,400,800])//par['dt']
+
         # DM task stuff
         self.dm_c_set = np.array([-0.08, -0.04, -0.02, -0.01, 0.01, 0.02, 0.04, 0.08])*4.
-        self.dm_stim_lengths = np.array([400,800,1600])//par['dt']
+        self.dm_stim_lengths = np.array([200,400,800])//par['dt']
 
         # DM Dly task stuff
         self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])*4.
-        self.dm_dly_delay = np.array([100, 200, 400, 800])//par['dt']
+        self.dm_dly_delay = np.array([200, 400, 800])//par['dt']
 
         # Matching task stuff
-        self.match_delay = np.array([100, 200, 400, 800])//par['dt']
+        self.match_delay = np.array([200, 400, 800])//par['dt']
 
         # Initialize task interface
         self.get_tasks()
@@ -177,19 +182,19 @@ class MultiStimulus:
 
         # Task parameters
         if variant == 'go':
-            stim_onset = np.random.randint(500, 1500, par['batch_size'])//par['dt']
+            stim_onset = np.random.randint(self.fix_time, self.fix_time+1000, par['batch_size'])//par['dt']
             stim_off = -1
-            fixation_end = np.ones(par['batch_size'], dtype=np.int8)*1500//par['dt']
+            fixation_end = np.ones(par['batch_size'], dtype=np.int16)*1500//par['dt']
             resp_onset = fixation_end
         elif variant == 'rt_go':
-            stim_onset = np.random.randint(500, 1500, par['batch_size'])//par['dt']
+            stim_onset = np.random.randint(self.fix_time, self.fix_time+1000, par['batch_size'])//par['dt']
             stim_off = -1
-            fixation_end = np.ones(par['batch_size'],dtype=np.int8)*par['num_time_steps']
+            fixation_end = np.ones(par['batch_size'],dtype=np.int16)*par['num_time_steps']
             resp_onset = stim_onset
         elif variant == 'dly_go':
-            stim_onset = 500//par['dt']*np.ones(par['batch_size'],dtype=np.int8)
-            stim_off = 800//par['dt']
-            fixation_end = stim_off + np.random.choice([100,200,400,800], size=par['batch_size'])//par['dt']
+            stim_onset = self.fix_time//par['dt']*np.ones((par['batch_size']),dtype=np.int16)
+            stim_off = (self.fix_time+300)//par['dt']
+            fixation_end = stim_off + np.random.choice(self.go_delay, size=par['batch_size'])
             resp_onset = fixation_end
         else:
             raise Exception('Bad task variant.')
@@ -281,7 +286,7 @@ class MultiStimulus:
 
         resp = np.zeros([par['num_motion_dirs'], par['batch_size']])
         for b in range(par['batch_size']):
-            resp[np.int8(resp_dirs[0,b]%par['num_motion_dirs']),b] = 1
+            resp[np.int16(resp_dirs[0,b]%par['num_motion_dirs']),b] = 1
 
         # Setting up arrays
         fixation = np.zeros(self.fixation_shape)
@@ -291,7 +296,7 @@ class MultiStimulus:
         mask[:par['dead_time']//par['dt'],:] = 0
 
         # Identify stimulus onset for each trial and build each trial from there
-        stim_onset = 500//par['dt']
+        stim_onset = self.fix_time//par['dt']
         stim_off   = stim_onset + np.random.choice(self.dm_stim_lengths, par['batch_size'])
         #resp_time  = stim_off + 500//par['dt']
         for b in range(par['batch_size']):
@@ -394,7 +399,7 @@ class MultiStimulus:
 
         resp = np.zeros([par['num_motion_dirs'], par['batch_size']])
         for b in range(par['batch_size']):
-            resp[np.int8(resp_dirs[0,b]%par['num_motion_dirs']),b] = 1
+            resp[np.int16(resp_dirs[0,b]%par['num_motion_dirs']),b] = 1
 
         # Setting up arrays
         fixation = np.zeros(self.fixation_shape)
@@ -404,11 +409,11 @@ class MultiStimulus:
         mask[:par['dead_time']//par['dt'],:] = 0
 
         # Identify stimulus onset for each trial and build each trial from there
-        stim_on1   = 500//par['dt']
-        stim_off1  = (500+300)//par['dt']
+        stim_on1   = self.fix_time//par['dt']
+        stim_off1  = (self.fix_time+300)//par['dt']
         stim_on2   = delay + stim_off1
         stim_off2  = stim_on2 + 300//par['dt']
-        resp_time  = stim_off2 + 300//par['dt']
+        resp_time  = stim_off2 + 0//par['dt']
         for b in range(par['batch_size']):
             fixation[:resp_time[0,b],b,:] = 1
             stimulus[stim_on1:stim_off1,b,:] = np.concatenate([modality1_t1[:,b], modality2_t1[:,b]], axis=0)[np.newaxis,:]
@@ -463,7 +468,7 @@ class MultiStimulus:
             raise Exception('Bad variant.')
 
         # Setting up arrays
-        modality_choice = np.random.choice(np.array([0,1], dtype=np.int8), [2, par['batch_size']])
+        modality_choice = np.random.choice(np.array([0,1], dtype=np.int16), [2, par['batch_size']])
         modalities = np.zeros([2, par['num_time_steps'], par['batch_size'], par['num_motion_tuned']//2])
         fixation = np.zeros(self.fixation_shape)
         response = np.zeros(self.response_shape)

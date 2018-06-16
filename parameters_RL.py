@@ -58,9 +58,9 @@ par = {
     # Task specs
     'task'                  : 'multistim',
     'n_tasks'               : 20,
-    'multistim_trial_length': 2500,
+    'multistim_trial_length': 2000,
     'mask_duration'         : 0,
-    'dead_time'             : 400,
+    'dead_time'             : 200,
 
     # Tuning function data
     'num_motion_dirs'       : 8,
@@ -71,7 +71,7 @@ par = {
     'spike_cost'            : 1e-6,
     'weight_cost'           : 0.,
     'entropy_cost'          : 0.01,
-    'drop_rate'             : 0.3,
+    'drop_rate'             : 0.25,
 
     # Synaptic plasticity specs
     'tau_fast'              : 200,
