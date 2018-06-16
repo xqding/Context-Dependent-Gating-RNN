@@ -34,7 +34,7 @@ class Model:
         self.entropy_cost = entropy_cost
 
         self.time_mask = tf.unstack(mask, axis=0)
-
+        print('NO DROPPING IN recurrent_cell')
 
         # Build the TensorFlow graph
         self.rnn_cell_loop()
@@ -66,8 +66,11 @@ class Model:
         """
         self.define_vars()
 
-        h = self.drop_mask*tf.constant(par['h_init'])
+        h = self.gating*self.drop_mask*tf.constant(par['h_init'])
         c = self.drop_mask*tf.constant(par['h_init'])
+        if par['LSTM']:
+            c *= 0.
+            h *= 0.
         syn_x = tf.constant(par['syn_x_init'])
         syn_u = tf.constant(par['syn_u_init'])
 
@@ -265,6 +268,8 @@ class Model:
 
     def recurrent_cell(self, h, c, syn_x, syn_u, x):
 
+
+
         if par['LSTM']:
             # forgetting gate
             f = tf.sigmoid(tf.matmul(x, self.Wf) + tf.matmul(h, self.Uf) + self.bf)
@@ -276,7 +281,7 @@ class Model:
             # output gate
             o = tf.sigmoid(tf.matmul(x, self.Wo) + tf.matmul(h, self.Uo) + self.bo)
 
-            h = self.drop_mask*self.gating*tf.multiply(o, tf.tanh(c))
+            h = self.gating*tf.multiply(o, tf.tanh(c))
             syn_x = tf.constant(-1.)
             syn_u = tf.constant(-1.)
 
@@ -291,7 +296,7 @@ class Model:
             else:
                 h_post = h
 
-            h = self.drop_mask*self.gating*tf.nn.relu((1-par['alpha_neuron'])*h +par['alpha_neuron']*(tf.matmul(x, tf.nn.relu(self.W_in)) + \
+            h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h +par['alpha_neuron']*(tf.matmul(x, tf.nn.relu(self.W_in)) + \
                 tf.matmul(h_post, self.W_rnn) + self.b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
             c = tf.constant(-1.)
 
@@ -455,11 +460,12 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 acc = np.mean(np.sum(reward>0,axis=0))
                 if acc > 0.99:
                     accuracy_above_threshold += 1
-                if accuracy_above_threshold >= 300 and i >= 2000:
-                    print('Accuracy above threshold occured 300 times')
+                if accuracy_above_threshold >= 2000:
+                    print('Accuracy above 99 percent 2000 times')
                     break
 
-                sess.run([model.reset_rnn_weights])
+                if par['EI']:
+                    sess.run([model.reset_rnn_weights])
                 if i%500 == 0:
                     #print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'spike_loss', spike_loss, ' h > 0 ', above_zero, 'mean h', np.mean(h_stacked))
                     print('Iter ', i, 'Task name ', name, ' accuracy', acc, ' aux loss', aux_loss, 'mean h', np.mean(np.stack(h_list)), 'time ', np.around(time.time() - task_start_time))

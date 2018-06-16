@@ -45,7 +45,7 @@ par = {
 
     # Timings and rates
     'dt'                    : 20,
-    'learning_rate'         : 2e-3,
+    'learning_rate'         : 1e-3,
     'membrane_time_constant': 100,
     'connection_prob'       : 1.0,
     'discount_rate'         : 0.,
@@ -72,7 +72,7 @@ par = {
     'spike_cost'            : 1e-7,
     'weight_cost'           : 0.,
     'entropy_cost'          : 0.005,
-    'drop_rate'             : 0.2,
+    'drop_rate'             : 0.0,
 
     # Synaptic plasticity specs
     'tau_fast'              : 100,
@@ -85,7 +85,7 @@ par = {
     'n_train_batches'       : 50000,
 
     # Omega parameters
-    'omega_c'               : 0.001,
+    'omega_c'               : 0.01,
     'omega_xi'              : 0.01,
     'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
 
@@ -209,6 +209,7 @@ def update_dependencies():
         par['EI'] = False
         par['exc_inh_prop'] = 1.
         par['synapse_config'] = False
+        par['spike_cost'] = 0.
 
     # Number of output neurons
     par['n_output'] = par['num_motion_dirs'] + 1
