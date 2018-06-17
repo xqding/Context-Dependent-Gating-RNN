@@ -71,7 +71,7 @@ par = {
     # Cost parameters
     'spike_cost'            : 1e-7,
     'weight_cost'           : 0.,
-    'entropy_cost'          : 0.005,
+    'entropy_cost'          : 0.01,
     'drop_rate'             : 0.0,
 
     # Synaptic plasticity specs
@@ -85,7 +85,7 @@ par = {
     'n_train_batches'       : 50000,
 
     # Omega parameters
-    'omega_c'               : 0.01,
+    'omega_c'               : 0.2,
     'omega_xi'              : 0.01,
     'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
 

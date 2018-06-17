@@ -463,6 +463,9 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 if accuracy_above_threshold >= 2000:
                     print('Accuracy above 99 percent 2000 times')
                     break
+                if i>25000 and acc > 0.95 and aux_loss < 1e-5:
+                    print('Good enough!')
+                    break
 
                 if par['EI']:
                     sess.run([model.reset_rnn_weights])
