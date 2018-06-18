@@ -19,19 +19,17 @@ Model setup and execution
 """
 class Model:
 
-    def __init__(self, input_data, target_data, gating, val_gating, pred_val, actual_action, advantage, mask, drop_mask, entropy_cost):
+    def __init__(self, input_data, target_data, gating, pred_val, actual_action, advantage, mask, drop_mask):
 
         # Load the input activity, the target data, and the training mask for this batch of trials
         self.input_data = tf.unstack(input_data, axis=0)
         self.target_data = tf.unstack(target_data, axis=0)
         self.gating = tf.reshape(gating, [1,-1])
-        self.val_gating = tf.reshape(val_gating, [1,-1])
         self.pred_val = tf.unstack(pred_val, axis=0)
         self.actual_action = tf.unstack(actual_action, axis=0)
         self.advantage = tf.unstack(advantage, axis=0)
         self.W_ei = tf.constant(par['EI_matrix'])
         self.drop_mask = drop_mask
-        self.entropy_cost = entropy_cost
 
         self.time_mask = tf.unstack(mask, axis=0)
         #print('NO DROPPING IN recurrent_cell')
@@ -366,7 +364,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
     """
     Define all placeholder
     """
-    x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, drop_mask, entropy_cost = generate_placeholders()
+    x, target, mask, pred_val, actual_action, advantage, mask, gating, drop_mask = generate_placeholders()
 
     config = tf.ConfigProto()
     #config.gpu_options.allow_growth=True
@@ -377,7 +375,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
 
         device = '/cpu:0' if gpu_id is None else '/gpu:0'
         with tf.device(device):
-            model = Model(x, target, gating, val_gating, pred_val, actual_action, advantage, mask, drop_mask, entropy_cost)
+            model = Model(x, target, gating, pred_val, actual_action, advantage, mask, drop_mask)
 
         sess.run(tf.global_variables_initializer())
 
@@ -399,10 +397,6 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
 
                 dm = get_drop_mask(task)
 
-                #ec = np.minimum(par['entropy_cost'], par['entropy_cost']*i/2000)
-                ec = par['entropy_cost']
-
-
                 # make batch of training data
                 name, input_data, _, mk, reward_data = stim.generate_trial(task)
                 mk = mk[..., np.newaxis]
@@ -411,8 +405,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 Run the model
                 """
                 pol_out_list, val_out_list, h_list, action_list, mask_list, reward_list = sess.run([model.pol_out, model.val_out, model.h, model.action, \
-                    model.mask, model.reward], {x: input_data, target: reward_data, mask: mk, gating:par['gating'][task], \
-                    val_gating:par['val_gating'][task], drop_mask: dm, entropy_cost:ec})
+                    model.mask, model.reward], {x: input_data, target: reward_data, mask: mk, gating:par['gating'][task]})
 
                 """
                 Unpack all lists, calculate predicted value and advantage functions
@@ -425,21 +418,18 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 if par['stabilization'] == 'pathint':
                     _, _, pol_loss, val_loss, aux_loss, spike_loss, ent_loss = sess.run([model.train_op, \
                          model.update_current_reward, model.pol_loss, model.val_loss, model.aux_loss, model.spike_loss, \
-                        model.entropy_loss], feed_dict = {x:input_data, target:reward_data, \
-                        gating:par['gating'][task], val_gating:par['val_gating'][task], mask:mk, pred_val: predicted_val, actual_action: act, \
-                        advantage:adv, drop_mask: dm, entropy_cost:ec})
+                        model.entropy_loss], feed_dict = {x:input_data, target:reward_data, gating:par['gating'][task], mask:mk, \
+                        pred_val: predicted_val, actual_action: act, advantage:adv, drop_mask: dm})
                     if i>0:
                         sess.run([model.update_small_omega])
                     sess.run([model.update_previous_reward])
 
 
-
-
                 elif par['stabilization'] == 'EWC':
                     _, pol_loss,val_loss, aux_loss, spike_loss, ent_loss = sess.run([model.train_op, model.pol_loss, \
                         model.val_loss, model.aux_loss, model.spike_loss, model.entropy_loss], feed_dict = \
-                        {x:input_data, target:reward_data, gating:par['gating'][task], val_gating:par['val_gating'][task], mask:mk, pred_val: predicted_val, \
-                        actual_action: act, advantage:adv, drop_mask: dm, entropy_cost:ec})
+                        {x:input_data, target:reward_data, gating:par['gating'][task], mask:mk, pred_val: predicted_val, \
+                        actual_action: act, advantage:adv, drop_mask: dm})
 
                 acc = np.mean(np.sum(reward>0,axis=0))
                 if acc > 0.99:
@@ -461,12 +451,6 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
 
             # Update big omegaes, and reset other values before starting new task
             if par['stabilization'] == 'pathint':
-                """
-                _, reset_masks = sess.run([model.reset_shunted_weights, model.reset_masks], feed_dict = \
-                    {x:input_data, target: reward_data, gating:par['gating'][task], mask:mk})
-                for i in range(len(reset_masks)):
-                    print('Mean reset masks ', np.mean(reset_masks[i]))
-                """
                 big_omegas = sess.run([model.update_big_omega, model.big_omega_var])
 
 
@@ -475,7 +459,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                     name, input_data, _, mk, reward_data = stim.generate_trial(task)
                     mk = mk[..., np.newaxis]
                     big_omegas = sess.run([model.update_big_omega,model.big_omega_var], feed_dict = \
-                        {x:input_data, target: reward_data, gating:par['gating'][task], mask:mk, entropy_cost:ec})
+                        {x:input_data, target: reward_data, gating:par['gating'][task], mask:mk})
 
             # Test all tasks at the end of each learning session
             num_reps = 10
@@ -505,9 +489,6 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
             sess.run(model.reset_prev_vars)
             if par['stabilization'] == 'pathint':
                 sess.run(model.reset_small_omega)
-
-
-
 
 
 
@@ -550,11 +531,9 @@ def generate_placeholders():
     actual_action = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_pol']])
     advantage  = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_val']])
     gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
-    val_gating = tf.placeholder(tf.float32, [par['n_val_hidden']], 'gating')
     drop_mask = tf.placeholder(tf.float32,[par['batch_size'], par['n_hidden']], 'drop_mask')
-    entropy_cost = tf.placeholder(tf.float32, [], 'entropy_cost')
 
-    return x, target, mask, pred_val, actual_action, advantage, mask, gating, val_gating, drop_mask, entropy_cost
+    return x, target, mask, pred_val, actual_action, advantage, mask, gating, drop_mask
 
 def eval_weights():
 
