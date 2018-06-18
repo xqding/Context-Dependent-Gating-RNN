@@ -34,7 +34,7 @@ class Model:
         self.entropy_cost = entropy_cost
 
         self.time_mask = tf.unstack(mask, axis=0)
-        print('NO DROPPING IN recurrent_cell')
+        #print('NO DROPPING IN recurrent_cell')
 
         # Build the TensorFlow graph
         self.rnn_cell_loop()
@@ -281,7 +281,7 @@ class Model:
             # output gate
             o = tf.sigmoid(tf.matmul(x, self.Wo) + tf.matmul(h, self.Uo) + self.bo)
 
-            h = self.gating*tf.multiply(o, tf.tanh(c))
+            h = self.drop_mask*self.gating*tf.multiply(o, tf.tanh(c))
             syn_x = tf.constant(-1.)
             syn_u = tf.constant(-1.)
 
@@ -296,7 +296,7 @@ class Model:
             else:
                 h_post = h
 
-            h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h +par['alpha_neuron']*(tf.matmul(x, tf.nn.relu(self.W_in)) + \
+            h = self.drop_mask*self.gating*tf.nn.relu((1-par['alpha_neuron'])*h +par['alpha_neuron']*(tf.matmul(x, tf.nn.relu(self.W_in)) + \
                 tf.matmul(h_post, self.W_rnn) + self.b_rnn) + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
             c = tf.constant(-1.)
 
@@ -393,27 +393,11 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
             accuracy_above_threshold = 0
 
             task_start_time = time.time()
-            gate_ind = np.where(par['gating'][task]>0)[0]
-            M1 = round(par['n_hidden']*(1-par['gate_pct'])*(1-par['drop_rate']))
-            M0 = round(par['n_hidden']*(1-par['gate_pct'])*(par['drop_rate']))
-            drop_vect = np.int8(np.vstack((np.ones((M1, 1)), np.zeros((M0, 1)))))
+
 
             for i in range(par['n_train_batches']):
 
-                dm = np.zeros((par['batch_size'], par['n_hidden']), dtype = np.float32)
-                for m in range(par['batch_size']):
-                    ind = np.random.permutation(gate_ind)[:M1]
-                    dm[m, ind] = 1
-
-                #print(np.sum(dm,axis=1))
-                #plt.imshow(dm, aspect = 'auto')
-                #plt.colorbar()
-                #plt.show()
-
-                #drop_ind = np.random.choice(gate_ind, par['batch_size'], replace = False)
-
-                #dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [par['drop_rate'], 1-par['drop_rate']]))
-                #dm /= np.mean(par['gating'][task]*dm, axis = 1, keepdims = True)/(1-par['gate_pct'])/(1-par['drop_rate'])
+                dm = get_drop_mask(task)
 
                 #ec = np.minimum(par['entropy_cost'], par['entropy_cost']*i/2000)
                 ec = par['entropy_cost']
@@ -500,12 +484,8 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 # make batch of training data
                 name, input_data, _, mk, reward_data = stim.generate_trial(task_prime)
                 mk = mk[..., np.newaxis]
-                #dm = np.float32(np.random.choice(2, size = [par['batch_size'], par['n_hidden']], p = [par['drop_rate'], 1-par['drop_rate']]))
-                #dm /= np.mean(dm, axis = 1, keepdims = True)
-                dm = np.zeros((par['batch_size'], par['n_hidden']), dtype = np.float32)
-                for m in range(par['batch_size']):
-                    ind = np.random.permutation(gate_ind)[:int(len(gate_ind)*(1-par['drop_rate']))]
-                    dm[m, ind] = 1
+
+                dm = get_drop_mask(task_prime)
 
                 reward_list = sess.run([model.reward], feed_dict = {x:input_data, target: reward_data, \
                     gating:par['gating'][task_prime], mask:mk, drop_mask: dm})
@@ -618,3 +598,17 @@ def print_key_params():
     print('Paramater info...')
     for k in key_info:
         print(k, ': ', par[k])
+
+def get_drop_mask(task):
+
+    if par['gate_pct'] > 0:
+        M1 = round(par['n_hidden']*(1-par['gate_pct'])*(1-par['drop_rate']))
+        gate_ind = np.where(par['gating'][task]>0)[0]
+        dm = np.zeros((par['batch_size'], par['n_hidden']), dtype = np.float32)
+        for m in range(par['batch_size']):
+            ind = np.random.permutation(gate_ind)[:M1]
+            dm[m, ind] = 1
+    else:
+        dm = np.ones((par['batch_size'], par['n_hidden']), dtype = np.float32)
+
+    return dm

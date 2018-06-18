@@ -45,7 +45,7 @@ par = {
 
     # Timings and rates
     'dt'                    : 20,
-    'learning_rate'         : 1e-3,
+    'learning_rate'         : 5e-4,
     'membrane_time_constant': 100,
     'connection_prob'       : 1.0,
     'discount_rate'         : 0.,
@@ -71,8 +71,8 @@ par = {
     # Cost parameters
     'spike_cost'            : 1e-7,
     'weight_cost'           : 0.,
-    'entropy_cost'          : 0.01,
-    'drop_rate'             : 0.0,
+    'entropy_cost'          : 0.005,
+    'drop_rate'             : 0.2,
 
     # Synaptic plasticity specs
     'tau_fast'              : 100,
@@ -85,7 +85,7 @@ par = {
     'n_train_batches'       : 50000,
 
     # Omega parameters
-    'omega_c'               : 0.2,
+    'omega_c'               : 0.05,
     'omega_xi'              : 0.01,
     'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
 
