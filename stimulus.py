@@ -149,6 +149,7 @@ class MultiStimulus:
             self.trial_info['reward_data'][respond_time,b,correct_response] = par['correct_choice_reward']
             for i in incorrect_response:
                 self.trial_info['reward_data'][respond_time,b,i] = par['wrong_choice_penalty']
+
         """
         plt.subplot(2,3,1)
         plt.imshow(self.trial_info['desired_output'][:,0,:], aspect = 'auto')
@@ -170,6 +171,7 @@ class MultiStimulus:
         plt.colorbar()
         plt.show()
         """
+
 
 
 
@@ -478,8 +480,8 @@ class MultiStimulus:
         mask[:par['dead_time']//par['dt'],:] = 0
 
         # Decide timings and build each trial
-        stim1_on  = 300//par['dt']
-        stim1_off = 600//par['dt']
+        stim1_on  = self.fix_time//par['dt']
+        stim1_off = (self.fix_time+300)//par['dt']
         stim2_on  = stim1_off + np.random.choice(self.match_delay, par['batch_size'])
         stim2_off = stim2_on + 300//par['dt']
         resp_time = stim2_off
@@ -487,8 +489,15 @@ class MultiStimulus:
 
         for b in range(par['batch_size']):
             fixation[:resp_time[b],b,:] = 1
+
+            #modalities[modality_choice[0,b],stim1_on:stim1_off,b,:] = stimulus1[np.newaxis,:,b]
+            #modalities[modality_choice[1,b],stim2_on[b]:stim2_off[b],b,:] = stimulus2[np.newaxis,:,b]
+
+            # Ensuring that sample and test stimuli are in same modality (RF)
             modalities[modality_choice[0,b],stim1_on:stim1_off,b,:] = stimulus1[np.newaxis,:,b]
-            modalities[modality_choice[1,b],stim2_on[b]:stim2_off[b],b,:] = stimulus2[np.newaxis,:,b]
+            modalities[modality_choice[0,b],stim2_on[b]:stim2_off[b],b,:] = stimulus2[np.newaxis,:,b]
+
+
             mask[resp_time[b]:resp_time[b]+par['mask_duration']//par['dt'],b] = 0
             if not resp[b] == -1:
                 response[resp_time[b]:,b,int(resp[b])] = 1
