@@ -32,7 +32,6 @@ class Model:
         self.drop_mask = drop_mask
 
         self.time_mask = tf.unstack(mask, axis=0)
-        #print('NO DROPPING IN recurrent_cell')
 
         # Build the TensorFlow graph
         self.rnn_cell_loop()
@@ -107,13 +106,10 @@ class Model:
 
         # calculate the policy output and choose an action
         pol_out = tf.matmul(h, self.W_pol_out) + self.b_pol_out
-        #random_exp = tf.random_uniform(shape = (par['batch_size'], 1))
-        #random_exp = tf.cast(random_exp > self.explore_prob, tf.float32)
-        #pol_out_exp = pol_out*random_exp
-
         action_index = tf.multinomial(pol_out, 1)
         action = tf.one_hot(tf.squeeze(action_index), par['n_pol'])
-        pol_out = tf.nn.softmax(pol_out, dim = 1) # needed for optimize
+
+        pol_out = tf.nn.softmax(pol_out, dim = 1) # needed for loss function
         val_out = tf.matmul(h, self.W_val_out) + self.b_val_out
 
         # if previous reward was non-zero, then end the trial, unless the new trial signal cue is on
@@ -128,9 +124,8 @@ class Model:
 
         epsilon = 1e-7
         self.variables = [var for var in tf.trainable_variables()]
-        #self.variables_val = [var for var in tf.trainable_variables() if 'val' in var.op.name]
         adam_optimizer = AdamOpt.AdamOpt(self.variables, learning_rate = par['learning_rate'])
-        #adam_optimizer_val = AdamOpt.AdamOpt(self.variables_val, learning_rate = 10.*par['learning_rate'])
+
 
         self.previous_weights_mu_minus_1 = {}
         reset_prev_vars_ops = []
@@ -157,20 +152,17 @@ class Model:
             self.actual_action, self.mask, self.time_mask)]))
 
 
-        self.entropy_loss = -self.entropy_cost*tf.reduce_mean(tf.stack([tf.reduce_sum(time_mask*mask*pol_out*tf.log(epsilon+pol_out), axis = 1) \
+        self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.stack([tf.reduce_sum(time_mask*mask*pol_out*tf.log(epsilon+pol_out), axis = 1) \
             for (pol_out, mask, time_mask) in zip(self.pol_out, self.mask, self.time_mask)]))
 
 
         self.val_loss = 0.5*tf.reduce_mean(tf.stack([time_mask*mask*tf.square(val_out - pred_val) \
             for (val_out, mask, time_mask, pred_val) in zip(self.val_out[:-1], self.mask, self.time_mask, self.pred_val[:-1])]))
 
-
-
         # Gradient of the loss+aux function, in order to both perform training and to compute delta_weights
         with tf.control_dependencies([self.pol_loss, self.aux_loss, self.spike_loss, self.val_loss]):
             self.train_op = adam_optimizer.compute_gradients(self.pol_loss + self.val_loss + \
                 self.aux_loss + self.spike_loss - self.entropy_loss)
-
 
         # Stabilizing weights
         if par['stabilization'] == 'pathint':
@@ -185,8 +177,6 @@ class Model:
         self.reset_adam_op = adam_optimizer.reset_params()
 
         self.make_recurrent_weights_positive()
-        #self.reset_zeroed_weights()
-
 
 
     def make_recurrent_weights_positive(self):
@@ -386,9 +376,8 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
 
         sess.run(model.reset_prev_vars)
 
-        for task in range(0, par['n_tasks']):
-        #for task in [0,3]:
-            accuracy_above_threshold = 0
+        for task in range(17, par['n_tasks']):
+            accuracy_iter = []
 
             task_start_time = time.time()
 
@@ -405,7 +394,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 Run the model
                 """
                 pol_out_list, val_out_list, h_list, action_list, mask_list, reward_list = sess.run([model.pol_out, model.val_out, model.h, model.action, \
-                    model.mask, model.reward], {x: input_data, target: reward_data, mask: mk, gating:par['gating'][task]})
+                    model.mask, model.reward], {x: input_data, target: reward_data, mask: mk, gating:par['gating'][task], drop_mask: dm})
 
                 """
                 Unpack all lists, calculate predicted value and advantage functions
@@ -432,14 +421,12 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                         actual_action: act, advantage:adv, drop_mask: dm})
 
                 acc = np.mean(np.sum(reward>0,axis=0))
-                if acc > 0.99:
-                    accuracy_above_threshold += 1
-                if accuracy_above_threshold >= 2000:
-                    print('Accuracy above 99 percent 2000 times')
-                    break
-                if i>25000 and acc > 0.95 and aux_loss < 1e-5:
-                    print('Good enough!')
-                    break
+                accuracy_iter.append(accuracy_iter)
+                if i > 2000:
+                    if np.mean(accuracy_iter[-2000:]) > 0.98 or (i>25000 and np.mean(accuracy_iter[-2000:]) > 0.98):
+                        print('Accuracy reached threshold')
+                        break
+
 
                 if par['EI']:
                     sess.run([model.reset_rnn_weights])
