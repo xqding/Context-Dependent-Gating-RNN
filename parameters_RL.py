@@ -71,8 +71,8 @@ par = {
     # Cost parameters
     'spike_cost'            : 1e-7,
     'weight_cost'           : 0.,
-    'entropy_cost'          : 0.005,
-    'drop_rate'             : 0.2,
+    'entropy_cost'          : 0.001,
+    'drop_rate'             : 0.0,
 
     # Synaptic plasticity specs
     'tau_fast'              : 100,

@@ -376,7 +376,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
 
         sess.run(model.reset_prev_vars)
 
-        for task in range(17, par['n_tasks']):
+        for task in range(0, par['n_tasks']):
             accuracy_iter = []
 
             task_start_time = time.time()
@@ -421,7 +421,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                         actual_action: act, advantage:adv, drop_mask: dm})
 
                 acc = np.mean(np.sum(reward>0,axis=0))
-                accuracy_iter.append(accuracy_iter)
+                accuracy_iter.append(acc)
                 if i > 2000:
                     if np.mean(accuracy_iter[-2000:]) > 0.98 or (i>25000 and np.mean(accuracy_iter[-2000:]) > 0.98):
                         print('Accuracy reached threshold')
