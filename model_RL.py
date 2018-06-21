@@ -105,10 +105,12 @@ class Model:
         h, c, syn_x, syn_u = self.recurrent_cell(h, c, syn_x, syn_u, x)
 
         # calculate the policy output and choose an action
+        # pol_out can be used for RL, supervised learning_rate
+
+        ############# RL specific
         pol_out = tf.matmul(h, self.W_pol_out) + self.b_pol_out
         action_index = tf.multinomial(pol_out, 1)
         action = tf.one_hot(tf.squeeze(action_index), par['n_pol'])
-
         pol_out = tf.nn.softmax(pol_out, dim = 1) # needed for loss function
         val_out = tf.matmul(h, self.W_val_out) + self.b_val_out
 
@@ -116,6 +118,7 @@ class Model:
         continue_trial = tf.cast(tf.equal(prev_reward, 0.), tf.float32)
         mask *= continue_trial
         reward = tf.reduce_sum(action*target, axis = 1, keep_dims = True)*mask*time_mask
+        #############
 
         return h, c, syn_x, syn_u, action, pol_out, val_out, mask, reward
 
@@ -423,7 +426,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 acc = np.mean(np.sum(reward>0,axis=0))
                 accuracy_iter.append(acc)
                 if i > 2000:
-                    if np.mean(accuracy_iter[-2000:]) > 0.98 or (i>25000 and np.mean(accuracy_iter[-2000:]) > 0.98):
+                    if np.mean(accuracy_iter[-2000:]) > 0.985 or (i>25000 and np.mean(accuracy_iter[-2000:]) > 0.98):
                         print('Accuracy reached threshold')
                         break
 

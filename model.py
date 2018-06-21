@@ -313,8 +313,7 @@ def main(save_fn=None, gpu_id = None):
                         model.entropy_loss, model.output], \
                         feed_dict = {x:stim_in, target:y_hat, gating:par['gating'][task], mask:mk})
                     sess.run([model.reset_rnn_weights])
-                    if loss < 0.005 and AL < 0.0004 + 0.0002*task:
-                        break
+
 
                 elif par['stabilization'] == 'EWC':
                     _, loss, AL = sess.run([model.train_op, model.task_loss, model.aux_loss], feed_dict = \

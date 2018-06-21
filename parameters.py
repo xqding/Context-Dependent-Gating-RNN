@@ -30,7 +30,7 @@ par = {
     'num_motion_tuned'      : 64,
     'num_fix_tuned'         : 4,
     'num_rule_tuned'        : 20,
-    'n_hidden'              : 256,
+    'n_hidden_fast'              : 256,
     'n_dendrites'           : 1, # don't use for now
     'n_val'                 : 1,
 
