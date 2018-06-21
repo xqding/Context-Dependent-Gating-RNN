@@ -73,6 +73,7 @@ par = {
     'weight_cost'           : 0.,
     'entropy_cost'          : 0.001,
     'drop_rate'             : 0.0,
+    'val_cost'              : 0.1,
 
     # Synaptic plasticity specs
     'tau_fast'              : 100,
@@ -85,7 +86,7 @@ par = {
     'n_train_batches'       : 50000,
 
     # Omega parameters
-    'omega_c'               : 0.05,
+    'omega_c'               : 0.1,
     'omega_xi'              : 0.01,
     'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
 

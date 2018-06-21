@@ -159,7 +159,7 @@ class Model:
             for (pol_out, mask, time_mask) in zip(self.pol_out, self.mask, self.time_mask)]))
 
 
-        self.val_loss = 0.5*tf.reduce_mean(tf.stack([time_mask*mask*tf.square(val_out - pred_val) \
+        self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(tf.stack([time_mask*mask*tf.square(val_out - pred_val) \
             for (val_out, mask, time_mask, pred_val) in zip(self.val_out[:-1], self.mask, self.time_mask, self.pred_val[:-1])]))
 
         # Gradient of the loss+aux function, in order to both perform training and to compute delta_weights
@@ -560,7 +560,7 @@ def print_results(iter_num, model_performance):
 
 def print_key_params():
 
-    key_info = ['synapse_config','spike_cost','weight_cost','entropy_cost','omega_c','omega_xi',\
+    key_info = ['synapse_config','spike_cost','weight_cost','entropy_cost','val_cost','omega_c','omega_xi',\
         'constrain_input_weights','num_sublayers','n_hidden','noise_rnn_sd','learning_rate',\
         'discount_rate', 'mask_duration', 'stabilization','gating_type', 'gate_pct','drop_rate',\
         'fix_break_penalty','wrong_choice_penalty','correct_choice_reward','include_rule_signal']
