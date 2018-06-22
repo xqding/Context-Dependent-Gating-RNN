@@ -150,6 +150,11 @@ class MultiStimulus:
             for i in incorrect_response:
                 self.trial_info['reward_data'][respond_time,b,i] = par['wrong_choice_penalty']
 
+            # penalize fixating throughout entire trial if response was required
+            if not self.trial_info['desired_output'][-1,b,-1] == 1:
+                self.trial_info['reward_data'][-1,b,-1] = par['fix_break_penalty']
+
+
         """
         plt.subplot(2,3,1)
         plt.imshow(self.trial_info['desired_output'][:,0,:], aspect = 'auto')
