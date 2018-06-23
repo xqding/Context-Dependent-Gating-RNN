@@ -502,8 +502,7 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
             if par['reset_weights']:
                 sess.run(model.reset_weights)
 
-            save_results = {'task': task, 'accuracy': accuracy, 'accuracy_full': accuracy_full, \
-                            'accuracy_grid': accuracy_grid, 'big_omegas': big_omegas, 'par': par}
+            save_results = {'task': task, 'accuracy_grid': accuracy_grid, 'par': par}
             pickle.dump(save_results, open(par['save_dir'] + save_fn, 'wb'))
             print('Results saved in ', par['save_dir'] + save_fn)
 
