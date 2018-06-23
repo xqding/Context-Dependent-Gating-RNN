@@ -1,6 +1,6 @@
 import numpy as np
 import tensorflow as tf
-from parameters_RL import par
+from parameters import par
 from itertools import product
 
 class AdamOpt:

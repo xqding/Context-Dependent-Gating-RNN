@@ -426,7 +426,7 @@ def main(gpu_id = None, save_fn = 'test.pkl'):
                 acc = np.mean(np.sum(reward>0,axis=0))
                 accuracy_iter.append(acc)
                 if i > 2000:
-                    if np.mean(accuracy_iter[-2000:]) > 0.985 or (i>25000 and np.mean(accuracy_iter[-2000:]) > 0.98):
+                    if np.mean(accuracy_iter[-2000:]) > 0.985 or (i>25000 and np.mean(accuracy_iter[-2000:]) > 0.96):
                         print('Accuracy reached threshold')
                         break
 

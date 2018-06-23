@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 #from parameters import par
-from parameters_RL import par
+from parameters import par
 
 print('Using \'Multistim\' stimulus file.')
 
