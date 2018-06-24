@@ -137,7 +137,9 @@ class Model:
 
                 # Check for trial continuation (ends if previous reward was non-zero)
                 continue_trial = tf.cast(tf.equal(self.reward[-1], 0.), tf.float32)
+                print('CONT TRIAL', continue_trial)
                 mask          *= continue_trial
+                print('MASK', mask)
                 reward         = tf.reduce_sum(action*target, axis=1, keep_dims=True)*mask*time_mask
 
                 # Record RL outputs
