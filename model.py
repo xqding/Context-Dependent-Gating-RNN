@@ -255,9 +255,9 @@ class Model:
             sup_loss = tf.constant(0.)
 
             self.time_mask = tf.reshape(tf.stack(self.time_mask),(par['num_time_steps'], par['batch_size'], 1))
-            self.mask = tf.constant(tf.stack(self.mask))
+            self.mask = tf.constant(tf.stack(self.mask).eval())
             self.reward = tf.stack(self.reward)
-            self.action = tf.constant(tf.stack(self.action))
+            self.action = tf.constant(tf.stack(self.action).eval())
             self.pol_out = tf.stack(self.pol_out)
 
 
