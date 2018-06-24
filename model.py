@@ -244,7 +244,6 @@ class Model:
         elif par['training_method'] == 'RL':
             sup_loss = tf.constant(0.)
 
-            self.mask = tf.stack(self.mask)
             self.time_mask = tf.stack(self.time_mask)
             self.reward = tf.stack(self.reward)
             self.actual_action = tf.stack(self.actual_action)
