@@ -263,7 +263,9 @@ class Model:
 
 
             # Compute predicted value, the actual action taken, and the advantage for plugging into the policy loss
-            val_out_stacked = tf.stack((tf.stack(self.val_out),tf.zeros([par['num_time_steps'],par['batch_size'],par['n_val']])), axis=0)
+            val_out = tf.stack(self.val_out)
+            val_out_stacked = tf.concat([tf.stack(self.val_out), tf.zeros([par['num_time_steps'],par['batch_size'],par['n_val']])],axis=0)
+            #val_out_stacked = tf.stack((tf.stack(self.val_out),tf.zeros([par['num_time_steps'],par['batch_size'],par['n_val']])), axis=0)
             terminal_state = tf.cast(tf.logical_not(tf.equal(self.reward, tf.constant(0.))), tf.float32)
             pred_val = self.reward + par['discount_rate']*val_out_stacked[1:,:,:]*(1-terminal_state)
             advantage = pred_val - val_out_stacked
