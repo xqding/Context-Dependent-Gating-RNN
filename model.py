@@ -136,6 +136,8 @@ class Model:
                 val_out        = h @ self.var_dict['W_val_out'] + self.var_dict['b_val_out']
 
                 # Check for trial continuation (ends if previous reward was non-zero)
+                print('REWARD', self.reward[-1])
+                print('REWARD 1',tf.equal(self.reward[-1], 0.))
                 continue_trial = tf.cast(tf.equal(self.reward[-1], 0.), tf.float32)
                 print('CONT TRIAL', continue_trial)
                 mask          *= continue_trial
