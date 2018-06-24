@@ -13,7 +13,7 @@ print("\n--> Loading parameters...")
 global par
 par = {
     # Setup parameters
-    'save_dir'              : './savedir/',
+    'save_dir'              : './savedir_v0/',
     'stabilization'         : 'pathint',    # 'EWC' (Kirkpatrick method) or 'pathint' (Zenke method)
     'save_analysis'         : False,
     'reset_weights'         : False,        # reset weights between tasks
@@ -35,7 +35,7 @@ par = {
 
     # Timings and rates
     'dt'                    : 20,
-    'learning_rate'         : 1e-3,
+    'learning_rate'         : 5e-4,
     'membrane_time_constant': 100,
     'connection_prob'       : 1.0,
     'discount_rate'         : 0.,
@@ -58,14 +58,14 @@ par = {
     'tuning_height'         : 4.0,        # magnitude scaling factor for von Mises
 
     # Cost values
-    'spike_cost'            : 0.,
+    'spike_cost'            : 1e-7,
     'weight_cost'           : 0.,
     'entropy_cost'          : 0.0001,
     'val_cost'              : 0.01,
 
     # Synaptic plasticity specs
-    'tau_fast'              : 100,
-    'tau_slow'              : 1000,
+    'tau_fast'              : 200,
+    'tau_slow'              : 1500,
     'U_stf'                 : 0.15,
     'U_std'                 : 0.45,
 
@@ -75,7 +75,7 @@ par = {
 
     # Omega parameters
     'omega_c'               : 0.2,
-    'omega_xi'              : 0.01,
+    'omega_xi'              : 0.001,
     'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
 
     # Gating parameters
@@ -171,7 +171,7 @@ def update_dependencies():
     par['h_init'] = 0.1*np.ones((par['batch_size'], par['n_hidden']), dtype=np.float32)
 
     # Initialize weights
-    c = 0.1
+    c = 0.05
 
     par['W_in_init'] = c*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_input'], par['n_hidden']]))
     par['W_out_init'] = np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_output']]))
@@ -208,10 +208,10 @@ def update_dependencies():
 
     if par['architecture'] == 'LSTM':
         c = 0.05
-        par['Wf_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
-        par['Wi_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
-        par['Wo_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
-        par['Wc_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wf_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wi_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wo_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wc_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
 
         par['Uf_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))
         par['Ui_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))
