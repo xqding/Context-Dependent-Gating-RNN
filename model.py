@@ -255,9 +255,9 @@ class Model:
             sup_loss = tf.constant(0.)
 
             self.time_mask = tf.reshape(tf.stack(self.time_mask),(par['num_time_steps'], par['batch_size'], 1))
-            self.mask = tf.stack(self.mask)
+            self.mask = tf.constant(tf.stack(self.mask))
             self.reward = tf.stack(self.reward)
-            self.action = tf.stack(self.action)
+            self.action = tf.constant(tf.stack(self.action))
             self.pol_out = tf.stack(self.pol_out)
 
 
@@ -269,6 +269,7 @@ class Model:
             terminal_state = tf.cast(tf.logical_not(tf.equal(self.reward, tf.constant(0.))), tf.float32)
             pred_val = self.reward + par['discount_rate']*val_out_stacked[1:,:,:]*(1-terminal_state)
             advantage = pred_val - val_out_stacked[:-1,:,:]
+            advantage = tf.constant(advantage)
             print('OPTIMIZE')
             print('MASK ', self.mask)
             print('TIME MASK ', self.time_mask)
@@ -284,7 +285,7 @@ class Model:
             self.pol_loss = -tf.reduce_mean(advantage*self.mask*self.time_mask*self.action*tf.log(epsilon+self.pol_out))
 
             # Value loss
-            self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(self.mask*self.time_mask*tf.square(val_out_stacked-pred_val))
+            self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(self.mask*self.time_mask*tf.square(val_out_stacked[:-1,:,:]-pred_val))
 
             # Entropy loss
             self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.reduce_sum(self.mask*self.time_mask*self.pol_out*tf.log(epsilon+self.pol_out), axis=1))
