@@ -254,7 +254,7 @@ class Model:
         elif par['training_method'] == 'RL':
             sup_loss = tf.constant(0.)
 
-            self.time_mask = tf.stack(self.time_mask)
+            self.time_mask = tf.reshape(tf.stack(self.time_mask),(par['num_time_steps'], par['batch_size'], 1))
             self.mask = tf.stack(self.mask)
             self.reward = tf.stack(self.reward)
             self.action = tf.stack(self.action)
