@@ -245,8 +245,12 @@ class Model:
             sup_loss = tf.constant(0.)
 
             self.time_mask = tf.stack(self.time_mask)
+            self.mask = tf.stack(self.mask)
             self.reward = tf.stack(self.reward)
             self.action = tf.stack(self.action)
+
+            print('MASK ', self.mask)
+            print('TIME MASK ', self.time_mask)
 
             # Compute predicted value, the actual action taken, and the advantage for plugging into the policy loss
             val_out_stacked = tf.stack((tf.stack(self.val_out),tf.zeros([par['num_time_steps'],par['batch_size'],par['n_val']])), axis=0)
