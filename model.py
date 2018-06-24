@@ -258,6 +258,7 @@ class Model:
             self.mask = tf.stack(self.mask)
             self.reward = tf.stack(self.reward)
             self.action = tf.stack(self.action)
+            self.pol_out = tf.stack(self.pol_out)
 
 
 
@@ -272,6 +273,9 @@ class Model:
             print('advantage ', advantage)
             print('action', self.action)
             print('pol_out', self.pol_out)
+            print('val_out_stacked', val_out_stacked)
+            print('pred_val', pred_val)
+            print('terminal_state', terminal_state)
 
 
             # Policy loss
