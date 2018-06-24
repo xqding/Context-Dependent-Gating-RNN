@@ -35,7 +35,7 @@ class MultiStimulus:
         self.dm_stim_lengths = np.array([200,400,800])//par['dt']
 
         # DM Dly task stuff
-        self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])*4.
+        self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])*1.
         self.dm_dly_delay = np.array([200, 400, 800])//par['dt']
 
         # Matching task stuff
@@ -162,7 +162,7 @@ class MultiStimulus:
         if variant == 'go':
             stim_onset = np.random.randint(self.fix_time, self.fix_time+1000, par['batch_size'])//par['dt']
             stim_off = -1
-            fixation_end = np.ones(par['batch_size'], dtype=np.int16)*1500//par['dt']
+            fixation_end = np.ones(par['batch_size'], dtype=np.int16)*(self.fix_time+1000)//par['dt']
             resp_onset = fixation_end
         elif variant == 'rt_go':
             stim_onset = np.random.randint(self.fix_time, self.fix_time+1000, par['batch_size'])//par['dt']
