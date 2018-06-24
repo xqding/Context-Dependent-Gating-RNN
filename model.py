@@ -597,11 +597,9 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
 
                 # Calculate and apply gradients
                 if par['stabilization'] == 'pathint':
-                    _, _, pol_loss, val_loss, aux_loss, spike_loss, ent_loss, h_list, reward_list = \
-                        sess.run([model.train_op, model.update_current_reward, model.pol_loss, model.val_loss, \
+                    _, _, _, pol_loss, val_loss, aux_loss, spike_loss, ent_loss, h_list, reward_list = \
+                        sess.run([model.train_op, model.update_current_reward, model.update_small_omega, model.pol_loss, model.val_loss, \
                         model.aux_loss, model.spike_loss, model.entropy_loss, model.h, model.reward], feed_dict = feed_dict)
-                    if i>0:
-                        sess.run([model.update_small_omega])
                     sess.run([model.update_previous_reward])
                 elif par['stabilization'] == 'EWC':
                     _, _, pol_loss,val_loss, aux_loss, spike_loss, ent_loss, h_list, reward_list = \
