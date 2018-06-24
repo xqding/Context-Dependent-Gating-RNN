@@ -105,7 +105,7 @@ class Model:
             c = tf.zeros_like(par['h_init'])
         syn_x = tf.constant(par['syn_x_init'])
         syn_u = tf.constant(par['syn_u_init'])
-        mask  = tf.constant(1.)
+        mask  = self.mask[0]
 
         # Loop through the neural inputs, indexed in time
         for rnn_input, target, time_mask in zip(self.input_data, self.target_data, self.time_mask):
