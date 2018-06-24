@@ -20,7 +20,9 @@ class MultiStimulus:
 
         # Motion and stimulus configuration
         self.motion_dirs    = np.linspace(0,2*np.pi-2*np.pi/par['num_motion_dirs'],par['num_motion_dirs'])
-        self.stimulus_dirs  = np.linspace(0,2*np.pi-2*np.pi/(par['num_motion_tuned']//2),(par['num_motion_tuned']//2))
+        self.pref_motion_dirs  = np.reshape(np.linspace(0,2*np.pi-2*np.pi/(par['num_motion_tuned']//2),\
+            (par['num_motion_tuned']//2)), (par['num_motion_tuned']//2,1))
+
         self.modality_size  = (par['num_motion_tuned'])//2
 
         self.fix_time = 400
@@ -49,13 +51,8 @@ class MultiStimulus:
 
     def circ_tuning(self, theta):
 
-        #return np.maximum(0, par['tuning_height']*(np.exp(par['kappa']*np.cos(theta-self.stimulus_dirs[:,np.newaxis])) - 1)/np.exp(par['kappa']))
-
-        ang_dist = np.angle(np.exp(1j*theta - 1j*self.stimulus_dirs[:,np.newaxis]))
+        ang_dist = np.angle(np.exp(1j*theta - 1j*self.pref_motion_dirs))
         return par['tuning_height']*np.exp(-0.5*(8*ang_dist/np.pi)**2)
-
-
-
 
 
     def get_tasks(self):
@@ -129,59 +126,32 @@ class MultiStimulus:
         task[0](*task[1:])                      # Generates that task into trial_info
         # Returns the trial info and the task name
 
-        # give -1 for breaking fixation, -0.01/+2 for choosing incorrectly/correctly
-        for b in range(par['batch_size']):
-            respond_time = np.where(np.sum(self.trial_info['desired_output'][:,b,:-1],axis=1) > 0)[0]
+        if par['training_method'] == 'RL':
+            for b in range(par['batch_size']):
+                respond_time = np.where(np.sum(self.trial_info['desired_output'][:,b,:-1],axis=1) > 0)[0]
 
-            # Else statements strictly for non-matches in matching task
-            fix_time = list(range(respond_time[0])) if len(respond_time) > 0 else [-1]
-            respond_time = respond_time if len(respond_time) > 0 else [-1]
+                # Else statements strictly for non-matches in matching task
+                fix_time = list(range(respond_time[0])) if len(respond_time) > 0 else [-1]
+                respond_time = respond_time if len(respond_time) > 0 else [-1]
 
-            correct_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:]==1)[0]
-            incorrect_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:-1]==0)[0]
-            if b==-1:
-                print('fix time', fix_time)
-                print('respond_time ', respond_time)
-                print('correct_response ', correct_response)
-                print('incorrect_response ', incorrect_response)
+                correct_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:]==1)[0]
+                incorrect_response = np.where(self.trial_info['desired_output'][respond_time[0],b,:-1]==0)[0]
+                if b==-1:
+                    print('fix time', fix_time)
+                    print('respond_time ', respond_time)
+                    print('correct_response ', correct_response)
+                    print('incorrect_response ', incorrect_response)
 
-            self.trial_info['reward_data'][fix_time,b,:-1] = par['fix_break_penalty']
-            self.trial_info['reward_data'][respond_time,b,correct_response] = par['correct_choice_reward']
-            for i in incorrect_response:
-                self.trial_info['reward_data'][respond_time,b,i] = par['wrong_choice_penalty']
+                self.trial_info['reward_data'][fix_time,b,:-1] = par['fix_break_penalty']
+                self.trial_info['reward_data'][respond_time,b,correct_response] = par['correct_choice_reward']
+                for i in incorrect_response:
+                    self.trial_info['reward_data'][respond_time,b,i] = par['wrong_choice_penalty']
 
-            # penalize fixating throughout entire trial if response was required
-            if not self.trial_info['desired_output'][-1,b,-1] == 1:
-                self.trial_info['reward_data'][-1,b,-1] = par['fix_break_penalty']
-
-
-        """
-        plt.subplot(2,3,1)
-        plt.imshow(self.trial_info['desired_output'][:,0,:], aspect = 'auto')
-        plt.colorbar()
-        plt.subplot(2,3,4)
-        plt.imshow(self.trial_info['desired_output'][:,1,:], aspect = 'auto')
-        plt.colorbar()
-        plt.subplot(2,3,2)
-        plt.imshow(self.trial_info['reward_data'][:,0,:], aspect = 'auto')
-        plt.colorbar()
-        plt.subplot(2,3,5)
-        plt.imshow(self.trial_info['reward_data'][:,1,:], aspect = 'auto')
-        plt.colorbar()
-        plt.subplot(2,3,3)
-        plt.imshow(self.trial_info['neural_input'][:,0,:], aspect = 'auto')
-        plt.colorbar()
-        plt.subplot(2,3,6)
-        plt.imshow(self.trial_info['neural_input'][:,1,:], aspect = 'auto')
-        plt.colorbar()
-        plt.show()
-        """
+                # penalize fixating throughout entire trial if response was required
+                if not self.trial_info['desired_output'][-1,b,-1] == 1:
+                    self.trial_info['reward_data'][-1,b,-1] = par['fix_break_penalty']
 
 
-
-
-
-        #self.trial_info['reward_data'] *= 3
         return task[1], self.trial_info['neural_input'], self.trial_info['desired_output'], \
             self.trial_info['train_mask'], self.trial_info['reward_data']
 
@@ -215,16 +185,14 @@ class MultiStimulus:
             # Input neurons index above par['num_motion_tuned'] encode fixation
             self.trial_info['neural_input'][:fixation_end[b], b, par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned']] \
                 += par['tuning_height']
-            """
-            self.trial_info['neural_input'][:fixation_end[b], b, par['num_motion_tuned']:par['num_motion_tuned']+par['num_fix_tuned']] \
-                += par['tuning_height']
-            """
+
             modality   = np.random.randint(2)
             neuron_ind = range(self.modality_size*modality, self.modality_size*(1+modality))
             stim_dir   = np.random.choice(self.motion_dirs)
             target_ind = int(np.round(par['num_motion_dirs']*(stim_dir+offset)/(2*np.pi))%par['num_motion_dirs'])
 
             self.trial_info['neural_input'][stim_onset[b]:stim_off, b, neuron_ind] += np.reshape(self.circ_tuning(stim_dir),(1,-1))
+
             self.trial_info['desired_output'][resp_onset[b]:, b, target_ind] = 1
             self.trial_info['desired_output'][:resp_onset[b], b, -1] = 1
 

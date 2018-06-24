@@ -132,13 +132,13 @@ class Model:
                 action         = tf.one_hot(tf.squeeze(action_index), par['n_pol'])
 
                 # Compute outputs for loss
-                pol_out        = tf.nn.softmax(pol_out, axis=1)  # Note softmax for entropy loss
+                pol_out        = tf.nn.softmax(pol_out, dim=1)  # Note softmax for entropy loss
                 val_out        = h @ self.var_dict['W_val_out'] + self.var_dict['b_val_out']
 
                 # Check for trial continuation (ends if previous reward was non-zero)
                 continue_trial = tf.cast(tf.equal(self.reward[-1], 0.), tf.float32)
                 mask          *= continue_trial
-                reward         = tf.reduce_sum(action*target, axis=1, keepdims=True)*mask*time_mask
+                reward         = tf.reduce_sum(action*target, axis=1, keep_dims=True)*mask*time_mask
 
                 # Record RL outputs
                 self.pol_out.append(pol_out)
@@ -249,11 +249,17 @@ class Model:
             terminal_state = tf.cast(tf.logical_not(tf.equal(tf.stack(self.reward), tf.constant(0.))), tf.float32)
             pred_val = tf.stack(self.reward) + par['discount_rate']*val_out_stacked[1:,:,:]*(1-terminal_state)
 
-            self.pred_val       = tf.unstack(pred_val, axis=0)
-            self.actual_action  = tf.unstack(tf.stack(self.action), axis=0)
-            self.advantage      = tf.unstack(pred_val-val_out_stacked[:-1,:,:], axis=0)
 
             # Policy loss
+            self.pol_loss = -tf.reduce_mean(self.advantage*self.mask*self.time_mask*self.actual_action*tf.log(epsilon+self.pol_out))
+
+            # Value loss
+            self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(self.mask*self.time_mask*tf.square(self.val_out-self.pred_val))
+
+            # Entropy loss
+            self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.reduce_sum(self.mask*self.time_mask*self.pol_out*tf.log(epsilon+self.pol_out), axis=1))
+
+            """
             self.pol_loss = -tf.reduce_mean(tf.stack([advantage*time_mask*mask*act*tf.log(epsilon+pol_out) \
                 for (pol_out, advantage, act, mask, time_mask) in zip(self.pol_out, self.advantage, \
                 self.actual_action, self.mask, self.time_mask)]))
@@ -267,6 +273,7 @@ class Model:
             self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.stack( \
                 [tf.reduce_sum(time_mask*mask*output*tf.log(epsilon+output), axis=1) \
                 for (output, mask, time_mask) in zip(self.output, self.mask, self.time_mask)]))
+            """
 
             RL_loss = self.pol_loss + self.val_loss - self.entropy_loss
 
@@ -331,7 +338,6 @@ class Model:
         reset_small_omega_ops = []
         update_small_omega_ops = []
         update_big_omega_ops = []
-        initialize_prev_weights_ops = []
 
         if par['training_method'] == 'RL':
             self.previous_reward = tf.Variable(-tf.ones([]), trainable=False)
@@ -484,12 +490,12 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
 
             # Update big omegas
             if par['stabilization'] == 'pathint':
-                big_omegas = sess.run([model.update_big_omega, model.big_omega_var])
+                _, big_omegas = sess.run([model.update_big_omega, model.big_omega_var])
             elif par['stabilization'] == 'EWC':
                 for n in range(par['EWC_fisher_num_batches']):
                     name, stim_in, y_hat, mk, _ = stim.generate_trial(task)
                     feed_dict = {x:stim_in, g:par['gating'][task_prime]}
-                    big_omegas = sess.run([model.update_big_omega, model.big_omega-var], \
+                    _, big_omegas = sess.run([model.update_big_omega, model.big_omega-var], \
                         feed_dict = feed_dict)
 
             # Reset the Adam Optimizer and save previous parameter values as current ones
@@ -635,7 +641,7 @@ def print_key_info():
     elif par['training_method'] == 'RL':
         key_info = ['training_method', 'architecture','synapse_config','spike_cost','weight_cost',\
             'entropy_cost','omega_c','omega_xi','n_hidden','noise_rnn_sd','learning_rate', 'discount_rate', \
-            'mask_duration', 'stabilization','gating_type', 'gate_pct','drop_rate','fix_break_penalty','wrong_choice_penalty',\
+            'mask_duration', 'stabilization','gating_type', 'gate_pct','fix_break_penalty','wrong_choice_penalty',\
             'correct_choice_reward','include_rule_signal']
     print('Key info:')
     print('-'*40)
