@@ -246,7 +246,7 @@ class Model:
 
             self.time_mask = tf.stack(self.time_mask)
             self.reward = tf.stack(self.reward)
-            self.actual_action = tf.stack(self.actual_action)
+            self.action = tf.stack(self.action)
 
             # Compute predicted value, the actual action taken, and the advantage for plugging into the policy loss
             val_out_stacked = tf.stack((tf.stack(self.val_out),tf.zeros([par['num_time_steps'],par['batch_size'],par['n_val']])), axis=0)
@@ -256,7 +256,7 @@ class Model:
 
 
             # Policy loss
-            self.pol_loss = -tf.reduce_mean(advantage*self.mask*self.time_mask*self.actual_action*tf.log(epsilon+self.pol_out))
+            self.pol_loss = -tf.reduce_mean(advantage*self.mask*self.time_mask*self.action*tf.log(epsilon+self.pol_out))
 
             # Value loss
             self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(self.mask*self.time_mask*tf.square(val_out_stacked-pred_val))
