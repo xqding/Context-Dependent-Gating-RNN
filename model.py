@@ -147,6 +147,8 @@ class Model:
                 print('EOC REWARD', reward)
                 print('EOC action', action)
                 print('EOC target', target)
+                print('EOC mask', mask)
+                print('EOC time_mask', time_mask)
 
                 # Record RL outputs
                 self.pol_out.append(pol_out)
