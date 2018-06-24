@@ -244,17 +244,23 @@ class Model:
         elif par['training_method'] == 'RL':
             sup_loss = tf.constant(0.)
 
+            self.mask = tf.stack(self.mask)
+            self.time_mask = tf.stack(self.time_mask)
+            self.reward = tf.stack(self.reward)
+            self.actual_action = tf.stack(self.actual_action)
+
             # Compute predicted value, the actual action taken, and the advantage for plugging into the policy loss
             val_out_stacked = tf.stack((tf.stack(self.val_out),tf.zeros([par['num_time_steps'],par['batch_size'],par['n_val']])), axis=0)
-            terminal_state = tf.cast(tf.logical_not(tf.equal(tf.stack(self.reward), tf.constant(0.))), tf.float32)
-            pred_val = tf.stack(self.reward) + par['discount_rate']*val_out_stacked[1:,:,:]*(1-terminal_state)
+            terminal_state = tf.cast(tf.logical_not(tf.equal(self.reward, tf.constant(0.))), tf.float32)
+            pred_val = self.reward + par['discount_rate']*val_out_stacked[1:,:,:]*(1-terminal_state)
+            advantage = pred_val - val_out_stacked
 
 
             # Policy loss
-            self.pol_loss = -tf.reduce_mean(self.advantage*self.mask*self.time_mask*self.actual_action*tf.log(epsilon+self.pol_out))
+            self.pol_loss = -tf.reduce_mean(advantage*self.mask*self.time_mask*self.actual_action*tf.log(epsilon+self.pol_out))
 
             # Value loss
-            self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(self.mask*self.time_mask*tf.square(self.val_out-self.pred_val))
+            self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(self.mask*self.time_mask*tf.square(val_out_stacked-pred_val))
 
             # Entropy loss
             self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.reduce_sum(self.mask*self.time_mask*self.pol_out*tf.log(epsilon+self.pol_out), axis=1))
