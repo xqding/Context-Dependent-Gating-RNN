@@ -144,6 +144,10 @@ class Model:
                 print('MASK', mask)
                 reward         = tf.reduce_sum(action*target, axis=1, keep_dims=True)*mask*time_mask
 
+                print('EOC REWARD', reward)
+                print('EOC action', action)
+                print('EOC target', target)
+
                 # Record RL outputs
                 self.pol_out.append(pol_out)
                 self.val_out.append(val_out)
