@@ -142,7 +142,7 @@ class Model:
                 print('CONT TRIAL', continue_trial)
                 mask          *= continue_trial
                 print('MASK', mask)
-                reward         = tf.reduce_sum(action*target, axis=1, keep_dims=True)*mask*time_mask
+                reward         = tf.reduce_sum(action*target, axis=1, keep_dims=True)*mask*tf.reshape(time_mask,[par['batch_size'], 1])
 
                 print('EOC REWARD', reward)
                 print('EOC action', action)
