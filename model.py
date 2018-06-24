@@ -136,19 +136,9 @@ class Model:
                 val_out        = h @ self.var_dict['W_val_out'] + self.var_dict['b_val_out']
 
                 # Check for trial continuation (ends if previous reward was non-zero)
-                print('REWARD', self.reward[-1])
-                print('REWARD 1',tf.equal(self.reward[-1], 0.))
                 continue_trial = tf.cast(tf.equal(self.reward[-1], 0.), tf.float32)
-                print('CONT TRIAL', continue_trial)
                 mask          *= continue_trial
-                print('MASK', mask)
                 reward         = tf.reduce_sum(action*target, axis=1, keep_dims=True)*mask*tf.reshape(time_mask,[par['batch_size'], 1])
-
-                print('EOC REWARD', reward)
-                print('EOC action', action)
-                print('EOC target', target)
-                print('EOC mask', mask)
-                print('EOC time_mask', time_mask)
 
                 # Record RL outputs
                 self.pol_out.append(pol_out)
@@ -255,11 +245,10 @@ class Model:
             sup_loss = tf.constant(0.)
 
             self.time_mask = tf.reshape(tf.stack(self.time_mask),(par['num_time_steps'], par['batch_size'], 1))
-            self.mask = tf.constant(tf.stack(self.mask).eval())
+            self.mask = tf.stack(self.mask)
             self.reward = tf.stack(self.reward)
-            self.action = tf.constant(tf.stack(self.action).eval())
+            self.action = tf.stack(self.action)
             self.pol_out = tf.stack(self.pol_out)
-
 
 
             # Compute predicted value, the actual action taken, and the advantage for plugging into the policy loss
@@ -269,7 +258,7 @@ class Model:
             terminal_state = tf.cast(tf.logical_not(tf.equal(self.reward, tf.constant(0.))), tf.float32)
             pred_val = self.reward + par['discount_rate']*val_out_stacked[1:,:,:]*(1-terminal_state)
             advantage = pred_val - val_out_stacked[:-1,:,:]
-            advantage = tf.constant(advantage)
+
             print('OPTIMIZE')
             print('MASK ', self.mask)
             print('TIME MASK ', self.time_mask)
@@ -280,15 +269,24 @@ class Model:
             print('pred_val', pred_val)
             print('terminal_state', terminal_state)
 
+            action_static = tf.Variable(tf.zeros(self.action.get_shape()), trainable=False)
+            advantage_static = tf.Variable(tf.zeros(advantage.get_shape()), trainable=False)
+            mask_static = tf.Variable(tf.zeros(self.mask.get_shape()), trainable=False)
 
-            # Policy loss
-            self.pol_loss = -tf.reduce_mean(advantage*self.mask*self.time_mask*self.action*tf.log(epsilon+self.pol_out))
+            RL_assign_ops = []
+            RL_assign_ops.append(tf.assign(action_static, self.action))
+            RL_assign_ops.append(tf.assign(advantage_static, advantage))
+            RL_assign_ops.append(tf.assign(mask_static, self.mask))
 
-            # Value loss
-            self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(self.mask*self.time_mask*tf.square(val_out_stacked[:-1,:,:]-pred_val))
+            RL_assign_op = tf.group(*RL_assign_ops)
 
-            # Entropy loss
-            self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.reduce_sum(self.mask*self.time_mask*self.pol_out*tf.log(epsilon+self.pol_out), axis=1))
+            with tf.control_dependencies([RL_assign_op]):
+                # Policy loss
+                self.pol_loss = -tf.reduce_mean(advantage_static*mask_static*self.time_mask*action_static*tf.log(epsilon+self.pol_out))
+                # Value loss
+                self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(mask_static*self.time_mask*tf.square(val_out_stacked[:-1,:,:]-pred_val))
+                # Entropy loss
+                self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.reduce_sum(mask_static*self.time_mask*self.pol_out*tf.log(epsilon+self.pol_out), axis=1))
 
             """
             self.pol_loss = -tf.reduce_mean(tf.stack([advantage*time_mask*mask*act*tf.log(epsilon+pol_out) \
