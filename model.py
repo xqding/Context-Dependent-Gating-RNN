@@ -25,14 +25,13 @@ class Model:
 
     """ RNN model for supervised and reinforcement learning training """
 
-    def __init__(self, input_data, target_data, mask, gating, learning_rate_modifier):
+    def __init__(self, input_data, target_data, mask, gating):
 
         # Load input activity, target data, training mask, etc.
         self.input_data         = tf.unstack(input_data, axis=0)
         self.target_data        = tf.unstack(target_data, axis=0)
         self.gating             = tf.reshape(gating, [1,-1])
         self.time_mask          = tf.unstack(mask, axis=0)
-        self.learning_rate_modifier = learning_rate_modifier
 
         # Declare all Tensorflow variables
         self.declare_variables()
