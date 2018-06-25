@@ -281,12 +281,13 @@ class Model:
                 self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.reduce_sum(mask_static*self.time_mask*self.pol_out*tf.log(epsilon+self.pol_out), axis=1))
 
 
+
             RL_loss = self.pol_loss + self.val_loss - self.entropy_loss
 
         # Collect loss terms and compute gradients
         total_loss = sup_loss + RL_loss + self.aux_loss + self.spike_loss
         with tf.control_dependencies([self.pol_loss, self.aux_loss, self.spike_loss]):
-            self.train_op = adam_optimizer.compute_gradients(total_loss, learning_rate_modifier = self.learning_rate_modifier)
+            self.train_op = adam_optimizer.compute_gradients(total_loss)
 
         # Stabilize weights
         if par['stabilization'] == 'pathint':
@@ -533,7 +534,7 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
 
     # Define all placeholders
     x, target, mask, pred_val, actual_action, \
-        advantage, mask, gating, learning_rate_modifier = generate_placeholders()
+        advantage, mask, gating = generate_placeholders()
 
     # Set up stimulus and accuracy recording
     stim = stimulus.MultiStimulus()
@@ -568,12 +569,9 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
 
                 # Generate a batch of stimulus data for training
                 name, input_data, _, mk, reward_data = stim.generate_trial(task)
-                if i < par['n_train_batches']-1000:
-                    lrm = np.exp(0.8*np.sin(i/20))
-                else:
-                    lrm = 1.
+
                 # Put together the feed dictionary
-                feed_dict = {x:input_data, target:reward_data, mask:mk, gating:par['gating'][task], learning_rate_modifier:lrm}
+                feed_dict = {x:input_data, target:reward_data, mask:mk, gating:par['gating'][task]}
 
                 # Calculate and apply gradients
                 if par['stabilization'] == 'pathint':
@@ -707,9 +705,8 @@ def generate_placeholders():
         actual_action = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_pol']])
         advantage  = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_val']])
         gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
-        learning_rate_modifier = tf.placeholder(tf.float32, [], 'gating')
 
-        return x, target, mask, pred_val, actual_action, advantage, mask, gating, learning_rate_modifier
+        return x, target, mask, pred_val, actual_action, advantage, mask, gating
 
     elif par['training_method'] == 'SL':
 

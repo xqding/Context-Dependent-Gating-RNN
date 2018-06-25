@@ -31,11 +31,11 @@ class MultiStimulus:
         self.go_delay = np.array([200, 400, 800])//par['dt']
 
         # DM task stuff
-        self.dm_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])
+        self.dm_c_set = np.array([-0.4, -0.2, -0.1, 0.1, 0.2, 0.4])
         self.dm_stim_lengths = np.array([200, 400, 800])//par['dt']
 
         # DM Dly task stuff
-        self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])
+        self.dm_dly_c_set = np.array([-0.4, -0.2, -0.1, 0.1, 0.2, 0.4])
         self.dm_dly_delay = np.array([200, 400, 800])//par['dt']
 
         # Matching task stuff
