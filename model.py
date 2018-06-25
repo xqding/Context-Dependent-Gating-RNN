@@ -25,13 +25,14 @@ class Model:
 
     """ RNN model for supervised and reinforcement learning training """
 
-    def __init__(self, input_data, target_data, mask, gating):
+    def __init__(self, input_data, target_data, mask, gating, learning_rate_modifier):
 
         # Load input activity, target data, training mask, etc.
         self.input_data         = tf.unstack(input_data, axis=0)
         self.target_data        = tf.unstack(target_data, axis=0)
         self.gating             = tf.reshape(gating, [1,-1])
         self.time_mask          = tf.unstack(mask, axis=0)
+        self.learning_rate_modifier = learning_rate_modifier
 
         # Declare all Tensorflow variables
         self.declare_variables()
@@ -259,15 +260,6 @@ class Model:
             pred_val = self.reward + par['discount_rate']*val_out_stacked[1:,:,:]*(1-terminal_state)
             advantage = pred_val - val_out_stacked[:-1,:,:]
 
-            print('OPTIMIZE')
-            print('MASK ', self.mask)
-            print('TIME MASK ', self.time_mask)
-            print('advantage ', advantage)
-            print('action', self.action)
-            print('pol_out', self.pol_out)
-            print('val_out_stacked', val_out_stacked)
-            print('pred_val', pred_val)
-            print('terminal_state', terminal_state)
 
             action_static = tf.Variable(tf.zeros(self.action.get_shape()), trainable=False)
             advantage_static = tf.Variable(tf.zeros(advantage.get_shape()), trainable=False)
@@ -288,28 +280,13 @@ class Model:
                 # Entropy loss
                 self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.reduce_sum(mask_static*self.time_mask*self.pol_out*tf.log(epsilon+self.pol_out), axis=1))
 
-            """
-            self.pol_loss = -tf.reduce_mean(tf.stack([advantage*time_mask*mask*act*tf.log(epsilon+pol_out) \
-                for (pol_out, advantage, act, mask, time_mask) in zip(self.pol_out, self.advantage, \
-                self.actual_action, self.mask, self.time_mask)]))
-
-            # Value loss
-            self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(tf.stack([time_mask*mask*tf.square(val_out-pred_val) \
-                for (val_out, mask, time_mask, pred_val) in zip(self.val_out[:-1], self.mask, \
-                self.time_mask, self.pred_val[:-1])]))
-
-            # Entropy loss
-            self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.stack( \
-                [tf.reduce_sum(time_mask*mask*output*tf.log(epsilon+output), axis=1) \
-                for (output, mask, time_mask) in zip(self.output, self.mask, self.time_mask)]))
-            """
 
             RL_loss = self.pol_loss + self.val_loss - self.entropy_loss
 
         # Collect loss terms and compute gradients
         total_loss = sup_loss + RL_loss + self.aux_loss + self.spike_loss
         with tf.control_dependencies([self.pol_loss, self.aux_loss, self.spike_loss]):
-            self.train_op = adam_optimizer.compute_gradients(total_loss)
+            self.train_op = adam_optimizer.compute_gradients(total_loss, learning_rate_modifier = self.learning_rate_modifier)
 
         # Stabilize weights
         if par['stabilization'] == 'pathint':
@@ -556,7 +533,7 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
 
     # Define all placeholders
     x, target, mask, pred_val, actual_action, \
-        advantage, mask, gating = generate_placeholders()
+        advantage, mask, gating, learning_rate_modifier = generate_placeholders()
 
     # Set up stimulus and accuracy recording
     stim = stimulus.MultiStimulus()
@@ -591,9 +568,12 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
 
                 # Generate a batch of stimulus data for training
                 name, input_data, _, mk, reward_data = stim.generate_trial(task)
-
+                if i < par['n_train_batches']-1000:
+                    lrm = np.exp(0.8*np.sin(i/20))
+                else:
+                    lrm = 1.
                 # Put together the feed dictionary
-                feed_dict = {x:input_data, target:reward_data, mask:mk, gating:par['gating'][task]}
+                feed_dict = {x:input_data, target:reward_data, mask:mk, gating:par['gating'][task], learning_rate_modifier:lrm}
 
                 # Calculate and apply gradients
                 if par['stabilization'] == 'pathint':
@@ -727,8 +707,9 @@ def generate_placeholders():
         actual_action = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_pol']])
         advantage  = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_val']])
         gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
+        learning_rate_modifier = tf.placeholder(tf.float32, [], 'gating')
 
-        return x, target, mask, pred_val, actual_action, advantage, mask, gating
+        return x, target, mask, pred_val, actual_action, advantage, mask, gating, learning_rate_modifier
 
     elif par['training_method'] == 'SL':
 

@@ -28,14 +28,14 @@ class MultiStimulus:
         self.fix_time = 400
 
         # Go task stuff
-        self.go_delay = np.array([200,400,800])//par['dt']
+        self.go_delay = np.array([200, 400, 800])//par['dt']
 
         # DM task stuff
-        self.dm_c_set = np.array([-0.08, -0.04, -0.02, -0.01, 0.01, 0.02, 0.04, 0.08])*4.
-        self.dm_stim_lengths = np.array([200,400,800])//par['dt']
+        self.dm_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])
+        self.dm_stim_lengths = np.array([200, 400, 800])//par['dt']
 
         # DM Dly task stuff
-        self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])*1.
+        self.dm_dly_c_set = np.array([-0.32, -0.16, -0.08, 0.08, 0.16, 0.32])
         self.dm_dly_delay = np.array([200, 400, 800])//par['dt']
 
         # Matching task stuff

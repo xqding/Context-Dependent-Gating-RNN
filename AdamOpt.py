@@ -55,7 +55,7 @@ class AdamOpt:
         return train_op
 
 
-    def compute_gradients(self, loss):
+    def compute_gradients(self, loss, learning_rate_modifier = 1.):
 
         self.gradients = self.grad_descent.compute_gradients(loss, var_list = self.variables)
 
@@ -68,7 +68,7 @@ class AdamOpt:
             new_m = self.beta1*self.m[var.op.name] + (1-self.beta1)*grads
             new_v = self.beta2*self.v[var.op.name] + (1-self.beta2)*grads*grads
 
-            delta_grad = - lr*new_m/(tf.sqrt(new_v) + self.epsilon)
+            delta_grad = - learning_rate_modifier*lr*new_m/(tf.sqrt(new_v) + self.epsilon)
             delta_grad = tf.clip_by_norm(delta_grad, 1)
 
             self.update_var_op.append(tf.assign(self.m[var.op.name], new_m))
