@@ -117,7 +117,7 @@ class Model:
         # if previous reward was non-zero, then end the trial, unless the new trial signal cue is on
         continue_trial = tf.cast(tf.equal(prev_reward, 0.), tf.float32)
         mask *= continue_trial
-        reward = tf.reduce_sum(action*target, axis = 1, keep_dims = True)*mask*time_mask
+        reward = tf.reduce_sum(action*target, axis = 1, keep_dims = True)*mask*tf.reshape(time_mask,[par['batch_size'], 1])
         #############
 
         return h, c, syn_x, syn_u, action, pol_out, val_out, mask, reward

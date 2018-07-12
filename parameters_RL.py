@@ -261,7 +261,7 @@ def update_dependencies():
     par['h_d_init'] = 0.1*np.ones((par['batch_size'], par['n_d_hidden']), dtype=np.float32)
 
     # Initialize input weights
-    c = 0.1
+    c = 0.05
     if par['EI']:
         par['W_rnn_init'] = c*np.float32(np.random.gamma(shape=0.25, scale=1.0, size = [par['n_hidden'], par['n_hidden']]))
         par['W_rnn_mask'] = np.ones((par['n_hidden'], par['n_hidden']), dtype=np.float32) - np.eye(par['n_hidden'])
@@ -320,10 +320,10 @@ def update_dependencies():
 
     if par['LSTM']:
         c = 0.05
-        par['Wf_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
-        par['Wi_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
-        par['Wo_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
-        par['Wc_init'] =  c*np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wf_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wi_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wo_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
+        par['Wc_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_input'], par['n_hidden']]))
 
         par['Uf_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))
         par['Ui_init'] =  np.float32(np.random.uniform(-c, c, size = [par['n_hidden'], par['n_hidden']]))

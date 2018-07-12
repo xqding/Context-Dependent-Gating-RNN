@@ -115,8 +115,8 @@ class Model:
 
             # Record hidden state
             self.h.append(h)
-            self.syn_x.append(syn_x)
-            self.syn_u.append(syn_u)
+            #self.syn_x.append(syn_x)
+            #self.syn_u.append(syn_u)
 
             if par['training_method'] == 'SL':
                 # Compute outputs for loss
