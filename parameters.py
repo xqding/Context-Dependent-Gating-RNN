@@ -1,4 +1,3 @@
-
 ### Authors: Nicolas Y. Masse, Gregory D. Grant
 
 import numpy as np
@@ -13,7 +12,7 @@ print("\n--> Loading parameters...")
 global par
 par = {
     # Setup parameters
-    'save_dir'              : './savedir_v0/',
+    'save_dir'              : './savedir/',
     'stabilization'         : 'pathint',    # 'EWC' (Kirkpatrick method) or 'pathint' (Zenke method)
     'save_analysis'         : False,
     'reset_weights'         : False,        # reset weights between tasks
@@ -22,8 +21,8 @@ par = {
     'synapse_config'        : 'std_stf',     # Full is 'std_stf'
     'exc_inh_prop'          : 0.8,          # Literature 0.8, for EI off 1
     'var_delay'             : False,
-    'training_method'       : 'SL',         # 'SL', 'RL'
-    'architecture'          : 'LSTM',       # 'BIO', 'LSTM'
+    'training_method'       : 'RL',         # 'SL', 'RL'
+    'architecture'          : 'BIO',       # 'BIO', 'LSTM'
 
     # Network shape
     'num_motion_tuned'      : 64,
@@ -31,11 +30,11 @@ par = {
     'num_rule_tuned'        : 0,
     'n_hidden'              : 256,
     'n_val'                 : 1,
-    'include_rule_signal'   : False,
+    'include_rule_signal'   : True,
 
     # Timings and rates
     'dt'                    : 20,
-    'learning_rate'         : 5e-4,
+    'learning_rate'         : 1e-3,
     'membrane_time_constant': 100,
     'connection_prob'       : 1.0,
     'discount_rate'         : 0.,
@@ -71,15 +70,15 @@ par = {
 
     # Training specs
     'batch_size'            : 256,
-    'n_train_batches'       : 4000, #50000,
+    'n_train_batches'       : 5000, #50000,
 
     # Omega parameters
-    'omega_c'               : 0.2,
+    'omega_c'               : 2.,
     'omega_xi'              : 0.001,
     'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
 
     # Gating parameters
-    'gating_type'           : 'XdG', # 'XdG', 'partial', 'split', None
+    'gating_type'           : None, # 'XdG', 'partial', 'split', None
     'gate_pct'              : 0.8,  # Num. gated hidden units for 'XdG' only
     'n_subnetworks'         : 4,    # Num. subnetworks for 'split' only
 
@@ -297,16 +296,7 @@ def gen_gating():
 
             elif par['gating_type'] == 'split':
                 if t%par['n_subnetworks'] == i%par['n_subnetworks']:
-                    if np.random.rand() < 1-par['gate_pct']:
-                        gating_task[i] = 0.5
-                    else:
-                        gating_task[i] = 1
-
-            elif par['gating_type'] == 'partial':
-                if np.random.rand() < 1-par['gate_pct']:
-                    gating_task[i] = 0.5
-                else:
-                    gating_task[i] = 1
+                    gating_layer[i] = 1
 
             elif par['gating_type'] is None:
                 gating_task[i] = 1

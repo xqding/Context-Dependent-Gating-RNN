@@ -15,7 +15,7 @@ class AdamOpt:
     self.v = gvs[0][1]
     """
 
-    def __init__(self, variables, learning_rate = 0.001, switch_to_sgd = 10000):
+    def __init__(self, variables, learning_rate = 0.001):
 
         self.beta1 = 0.9
         self.beta2 = 0.999
@@ -23,7 +23,6 @@ class AdamOpt:
         self.t = 0
         self.variables = variables
         self.learning_rate = learning_rate
-        self.switch_to_sgd = switch_to_sgd
 
         self.m = {}
         self.v = {}
@@ -69,17 +68,11 @@ class AdamOpt:
             new_m = self.beta1*self.m[var.op.name] + (1-self.beta1)*grads
             new_v = self.beta2*self.v[var.op.name] + (1-self.beta2)*grads*grads
 
-            # after so many epochs, switch from ADAM to SGD
-            if self.t < self.switch_to_sgd:
-                delta_grad = - lr*new_m/(tf.sqrt(new_v) + self.epsilon)
-            else:
-                delta_grad = -lr*delta_grad
+            delta_grad = - lr*new_m/(tf.sqrt(new_v) + self.epsilon)
             delta_grad = tf.clip_by_norm(delta_grad, 1)
 
             self.update_var_op.append(tf.assign(self.m[var.op.name], new_m))
             self.update_var_op.append(tf.assign(self.v[var.op.name], new_v))
-            #self.update_var_op.append(tf.assign(self.delta_grads[var.op.name], delta_grad))
-            self.update_var_op.append(tf.assign(self.delta_grads[var.op.name], delta_grad))
 
             if 'W_rnn' in var.op.name:
                 print('Applied W_rnn mask.')
@@ -93,6 +86,8 @@ class AdamOpt:
             elif 'W_out' in var.op.name:
                 print('Applied W_out mask.')
                 delta_grad *= par['W_out_mask']
+
+            self.update_var_op.append(tf.assign(self.delta_grads[var.op.name], delta_grad))
             self.update_var_op.append(tf.assign_add(var, delta_grad))
 
         return tf.group(*self.update_var_op)
