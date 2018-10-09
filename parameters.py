@@ -1,7 +1,6 @@
 ### Authors: Nicolas Y. Masse, Gregory D. Grant
 
 import numpy as np
-from itertools import product, chain
 
 print("\n--> Loading parameters...")
 
@@ -13,16 +12,16 @@ global par
 par = {
     # Setup parameters
     'save_dir'              : './savedir/',
-    'stabilization'         : 'pathint',    # 'EWC' (Kirkpatrick method) or 'pathint' (Zenke method)
+    'stabilization'         : 'pathint',    # None or 'pathint' (Zenke method)
     'save_analysis'         : False,
     'reset_weights'         : False,        # reset weights between tasks
 
     # Network configuration
-    'synapse_config'        : 'std_stf',     # Full is 'std_stf'
+    'synapse_config'        : 'std_stf',    # Full is 'std_stf', otherwise None
     'exc_inh_prop'          : 0.8,          # Literature 0.8, for EI off 1
     'var_delay'             : False,
     'training_method'       : 'RL',         # 'SL', 'RL'
-    'architecture'          : 'BIO',       # 'BIO', 'LSTM'
+    'architecture'          : 'BIO',        # 'BIO', 'LSTM'
 
     # Network shape
     'num_motion_tuned'      : 64,
@@ -46,7 +45,7 @@ par = {
     'noise_rnn_sd'          : 0.05,
 
     # Task specs
-    'task'                  : 'multistim',
+    'task'                  : 'multistim',  # See stimulus file for more options
     'n_tasks'               : 20,
     'multistim_trial_length': 2000,
     'mask_duration'         : 0,
@@ -54,7 +53,7 @@ par = {
 
     # Tuning function data
     'num_motion_dirs'       : 8,
-    'tuning_height'         : 4.0,        # magnitude scaling factor for von Mises
+    'tuning_height'         : 4.0,          # von Mises magnitude scaling factor
 
     # Cost values
     'spike_cost'            : 1e-7,
@@ -75,10 +74,9 @@ par = {
     # Omega parameters
     'omega_c'               : 2.,
     'omega_xi'              : 0.001,
-    'EWC_fisher_num_batches': 16,   # number of batches when calculating EWC
 
     # Gating parameters
-    'gating_type'           : None, # 'XdG', 'partial', 'split', None
+    'gating_type'           : None, # 'XdG', 'split', or None
     'gate_pct'              : 0.8,  # Num. gated hidden units for 'XdG' only
     'n_subnetworks'         : 4,    # Num. subnetworks for 'split' only
 
@@ -86,11 +84,6 @@ par = {
     'fix_break_penalty'     : -1.,
     'wrong_choice_penalty'  : -0.01,
     'correct_choice_reward' : 1.,
-
-    # Save paths
-    'save_fn'               : 'model_results.pkl',
-    'ckpt_save_fn'          : 'model.ckpt',
-    'ckpt_load_fn'          : 'model.ckpt',
 
 }
 

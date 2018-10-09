@@ -284,9 +284,6 @@ class Model:
         if par['stabilization'] == 'pathint':
             # Zenke method
             self.pathint_stabilization(adam_optimizer)
-        elif par['stabilization'] == 'EWC':
-            # Kirkpatrick method
-            self.EWC()
         else:
             # No stabilization
             pass
@@ -391,34 +388,6 @@ class Model:
         self.update_small_omega = tf.group(*update_small_omega_ops) # 1) update small_omega after each train!
 
 
-    def EWC(self):
-        """ Synaptic stabilization via the Kirkpatrick method """
-
-        # Set up method
-        var_list = [var for var in tf.trainable_variables() if not 'val' in var.op.name]
-        epsilon = 1e-6
-        fisher_ops = []
-        opt = tf.train.GradientDescentOptimizer(learning_rate = 1.0)
-
-        # Sample from logits
-        if par['training_method'] == 'RL':
-            log_p_theta = tf.stack([mask*time_mask*action*tf.log(epsilon + pol_out) for (pol_out, action, mask, time_mask) in \
-                zip(self.pol_out, self.action, self.mask, self.time_mask)], axis = 0)
-        elif par['training_method'] == 'SL':
-            log_p_theta = tf.stack([mask*time_mask*tf.log(epsilon + output) for (output, mask, time_mask) in \
-                zip(self.output, self.mask, self.time_mask)], axis = 0)
-
-        # Compute gradients and add to aggregate
-        grads_and_vars = opt.compute_gradients(log_p_theta, var_list = var_list)
-        for grad, var in grads_and_vars:
-            print(var.op.name)
-            fisher_ops.append(tf.assign_add(self.big_omega_var[var.op.name], \
-                grad*grad/par['EWC_fisher_num_batches']))
-
-        # Make update group
-        self.update_big_omega = tf.group(*fisher_ops)
-
-
 def supervised_learning(save_fn='test.pkl', gpu_id=None):
     """ Run supervised learning training """
 
@@ -472,9 +441,6 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
                     _, _, loss, AL, spike_loss, output = sess.run([model.train_op, \
                         model.update_small_omega, model.pol_loss, model.aux_loss, \
                         model.spike_loss, model.output], feed_dict=feed_dict)
-                elif par['stabilization'] == 'EWC':
-                    _, loss, AL, output = sess.run([model.train_op, model.pol_loss, \
-                        model.aux_loss, model.output], feed_dict=feed_dict)
 
                 # Display network performance
                 if i%500 == 0:
@@ -514,12 +480,6 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
             # Update big omegas
             if par['stabilization'] == 'pathint':
                 _, big_omegas = sess.run([model.update_big_omega, model.big_omega_var])
-            elif par['stabilization'] == 'EWC':
-                for n in range(par['EWC_fisher_num_batches']):
-                    name, stim_in, y_hat, mk, _ = stim.generate_trial(task)
-                    feed_dict = {x:stim_in, g:par['gating'][task_prime]}
-                    _, big_omegas = sess.run([model.update_big_omega, model.big_omega-var], \
-                        feed_dict = feed_dict)
 
             # Reset the Adam Optimizer and save previous parameter values as current ones
             sess.run(model.reset_adam_op)
@@ -599,10 +559,6 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
                     if i>0:
                         sess.run([model.update_small_omega])
                     sess.run([model.update_previous_reward])
-                elif par['stabilization'] == 'EWC':
-                    _, _, pol_loss,val_loss, aux_loss, spike_loss, ent_loss, h_list, reward_list = \
-                        sess.run([model.train_op, model.update_current_reward, model.pol_loss, model.val_loss, \
-                        model.aux_loss, model.spike_loss, model.entropy_loss, model.h, model.reward], feed_dict = feed_dict)
 
                 # Record accuracies
                 reward = np.stack(reward_list)
@@ -621,14 +577,6 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
             # Update big omegaes, and reset other values before starting new task
             if par['stabilization'] == 'pathint':
                 big_omegas = sess.run([model.update_big_omega, model.big_omega_var])
-
-
-            elif par['stabilization'] == 'EWC':
-                for n in range(par['EWC_fisher_num_batches']):
-                    name, input_data, _, mk, reward_data = stim.generate_trial(task)
-                    mk = mk[..., np.newaxis]
-                    big_omegas = sess.run([model.update_big_omega,model.big_omega_var], feed_dict = \
-                        {x:input_data, target: reward_data, gating:par['gating'][task], mask:mk})
 
             # Test all tasks at the end of each learning session
             num_reps = 10

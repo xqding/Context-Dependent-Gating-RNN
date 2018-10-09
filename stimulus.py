@@ -463,29 +463,3 @@ class MultiStimulus:
         self.trial_info['train_mask'] = mask
 
         return self.trial_info
-
-### EXAMPLE USAGE ###
-"""
-st = MultiStimulus()
-for i in range(len(st.task_types)):
-    print(i, st.task_types[i][1:])
-    t, trial_info = st.generate_trial(i)
-
-    s = trial_info['neural_input']
-    r = trial_info['desired_output']
-    m = trial_info['train_mask']
-
-    print(t)
-    print(s.shape)
-    print(r.shape)
-    print(m.shape)
-
-    fig, axarr = plt.subplots(8, 3, sharex=True, sharey=True)
-    for i in range(8):
-        axarr[i,0].imshow(s[:,:,i])
-        axarr[i,1].imshow(r[:,:,i])
-        axarr[i,2].plot(m[:,i])
-
-    plt.show()
-quit()
-"""
