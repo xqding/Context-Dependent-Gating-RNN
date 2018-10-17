@@ -2,6 +2,9 @@ import numpy as np
 import tensorflow as tf
 from parameters import par
 from itertools import product
+import pprint
+
+pp = pprint.PrettyPrinter(indent=4)
 
 class AdamOpt:
 
@@ -22,6 +25,7 @@ class AdamOpt:
         self.epsilon = 1e-08
         self.t = 0
         self.variables = variables
+        #pp.pprint(self.variables)
         self.learning_rate = learning_rate
 
         self.m = {}
@@ -58,6 +62,7 @@ class AdamOpt:
     def compute_gradients(self, loss):
 
         self.gradients = self.grad_descent.compute_gradients(loss, var_list = self.variables)
+        #pp.pprint(self.gradients)
 
         self.t += 1
         lr = self.learning_rate*np.sqrt(1-self.beta2**self.t)/(1-self.beta1**self.t)
@@ -65,6 +70,10 @@ class AdamOpt:
 
         #grads_and_vars = []
         for (grads, _), var in zip(self.gradients, self.variables):
+
+            if grads is None:
+                grads = 0
+
             new_m = self.beta1*self.m[var.op.name] + (1-self.beta1)*grads
             new_v = self.beta2*self.v[var.op.name] + (1-self.beta2)*grads*grads
 

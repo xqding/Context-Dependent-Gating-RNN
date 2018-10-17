@@ -5,6 +5,7 @@ from itertools import product, chain
 
 print("\n--> Loading parameters...")
 
+
 ##############################
 ### Independent parameters ###
 ##############################
@@ -23,9 +24,11 @@ par = {
     'var_delay'             : False,
     'training_method'       : 'RL',         # 'SL', 'RL'
     'architecture'          : 'BIO',       # 'BIO', 'LSTM'
+    'stimulus_choice'       : 'static',     # 'static', 'dynamic'
 
     # Network shape
     'num_motion_tuned'      : 64,
+    'num_position_tuned'    : 64,
     'num_fix_tuned'         : 4,
     'num_rule_tuned'        : 0,
     'n_hidden'              : 256,
@@ -51,10 +54,19 @@ par = {
     'multistim_trial_length': 2000,
     'mask_duration'         : 0,
     'dead_time'             : 200,
+    'num_possible_cues'     : 3,              # number of possible rules (spec. for dynamically-generated stimulus task)
 
     # Tuning function data
-    'num_motion_dirs'       : 8,
-    'tuning_height'         : 4.0,        # magnitude scaling factor for von Mises
+    'num_motion_dirs'           : 8,
+    'tuning_height'             : 4.0,        # magnitude scaling factor for von Mises
+    'num_position_locs'         : 8,          # number of possible positions (x and y) to be tuned to
+    'num_trials_per_sequence'   : 300,       # number of trials to string back to back to back per sequence
+    'selfexp_ITI_duration'      : 200,        # duration of inter-trial interval
+    'selfexp_cue_duration'      : 200,        # duration of action cue interval
+    'selfexp_samp_resp_duration': 400,        # duration of sample + response interval
+
+    # self-generation of stimuli param
+    'n_stimulus_params'         : 4,          # number of stimulus parameters (for now, 4, because px, py, vx, vy)
 
     # Cost values
     'spike_cost'            : 1e-7,
@@ -142,7 +154,17 @@ def update_dependencies():
     par['n_output'] = par['num_motion_dirs'] + 1
     par['n_pol'] = par['num_motion_dirs'] + 1
 
+    if par['stimulus_choice'] == 'dynamic':
+        par['n_output']       = 3 # fixate, L, R
+        par['num_rule_tuned'] = par['num_possible_cues']
+        par['batch_size']     = 1
+        par['n_tasks']        = 1
+        par['stabilization']  = None
+        par['n_pol'] = par['n_output']
+
     # Number of input neurons
+    if par['task'] == 'selfexp':
+        par['num_motion_tuned'] = par['num_motion_dirs'] * par['num_position_tuned']
     par['n_input'] = par['num_motion_tuned'] + par['num_fix_tuned'] + par['num_rule_tuned']
 
     # General network shape
@@ -186,6 +208,7 @@ def update_dependencies():
     # Initialize biases
     par['b_rnn_init'] = np.zeros((1,par['n_hidden']), dtype = np.float32)
     par['b_out_init'] = np.zeros((1,par['n_output']), dtype = np.float32)
+
 
     # Specify masks
     par['W_out_mask'] = np.ones((par['n_hidden'], par['n_output']), dtype=np.float32)
@@ -280,6 +303,15 @@ def update_dependencies():
     par['syn_u_init'] = np.transpose(par['syn_u_init'])
 
 
+    ###
+    ### setting up dynamic stimulus selection parameters (if needed); NOTE HARDCODED 4
+    ###
+    if par['task'] == 'selfexp':
+        par['stimulus_choice'] = "dynamic"
+        par['b_a_init']        = np.random.normal(0, 0.01, (4, 1)).astype(np.float32)
+        par['W_a_init']        = 0.1 * np.ones((par['n_stimulus_params'], par['n_hidden']), dtype = np.float32)
+
+
 def gen_gating():
     """
     Generate the gating signal to applied to all hidden units
@@ -299,7 +331,7 @@ def gen_gating():
                     gating_layer[i] = 1
 
             elif par['gating_type'] is None:
-                gating_task[i] = 1
+                gating_task[i] = 1.
 
         par['gating'].append(gating_task)
 

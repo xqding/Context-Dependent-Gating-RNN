@@ -20,9 +20,28 @@ class MultiStimulus:
         # Motion and stimulus configuration
         self.motion_dirs        = np.linspace(0,2*np.pi-2*np.pi/par['num_motion_dirs'],par['num_motion_dirs'])
         self.stimulus_dirs      = np.linspace(0,2*np.pi-2*np.pi/(par['num_motion_tuned']//2),(par['num_motion_tuned']//2))
+        self.pref_motion_dirs   = np.reshape(
+                                    np.linspace(0, (2 * np.pi) - (2 * np.pi) / (par['num_motion_tuned'] // 2),
+                                        (par['num_motion_tuned'] // 2)), (par['num_motion_tuned'] // 2, 1)
+                                  )
+        """
         self.pref_motion_dirs   = np.reshape(np.linspace(0,2*np.pi-2*np.pi/(par['num_motion_tuned']//2), \
             (par['num_motion_tuned']//2)), (par['num_motion_tuned']//2,1))
+        """
         self.modality_size      = (par['num_motion_tuned'])//2
+
+        # set position preference (spatial RF analogue)
+        spatial_inc = 2.0 / par['num_position_locs']
+        self.pref_positions     = np.mgrid[-1 + 0.5 * spatial_inc:1.0:spatial_inc, 
+                                           -1 + 0.5 * spatial_inc:1.0:spatial_inc].reshape(2, -1).T
+
+        # special case for dynamically-chosen stimuli: expand input
+        """if par['stimulus_choice'] == 'dynamic':
+            par['num_motion_tuned'] = par['num_motion_dirs'] * par['num_position_locs']
+            self.pref_dir_pos = np.tile(self.pref_positions, (par['num_motion_dirs'], 1))
+            directions = [self.motion_dirs[i // self.pref_positions.shape[0]] \
+                                    for i in range(self.pref_dir_pos.shape[0])]
+            self.pref_dir_pos = np.hstack((self.pref_dir_pos, directions))"""
 
         self.fix_time = 400
 
@@ -48,11 +67,28 @@ class MultiStimulus:
         self.rule_signal_factor = 1. if par['include_rule_signal'] else 0.
 
 
+    # Von Mises distribution
     def circ_tuning(self, theta):
-
         ang_dist = np.angle(np.exp(1j*theta - 1j*self.pref_motion_dirs))
         return par['tuning_height']*np.exp(-0.5*(8*ang_dist/np.pi)**2)
 
+
+    # 2d normal distribution, mean at pt (current sample)
+    def rf_tuning(self, pts):
+        pos_var = np.var(self.pref_positions)
+        r = np.exp(-(pts[:,0] - self.pref_positions[:,0])**2 / (pos_var * 2)) * \
+            np.exp(-(pts[:,1] - self.pref_positions[:,1])**2 / (pos_var * 2)) / \
+            (2 * np.pi)
+        return par['tuning_height'] * r
+
+    def pos_dir_tuning(self, pts):
+        position_variance  = np.var(self.pref_positions)
+        direction_variance = np.var(self.motion_dirs)
+        r = np.exp(-(pts[:,0] - self.pref_dir_pos[:,0])**2 / (position_variance  * 2)) * \
+            np.exp(-(pts[:,1] - self.pref_dir_pos[:,1])**2 / (position_variance  * 2)) * \
+            np.exp(-(pts[:,2] - self.pref_dir_pos[:,2])**2 / (direction_variance * 2)) / \
+            ((2 * np.pi) ** (1.5))
+        return par['tuning_height'] * r
 
     def get_tasks(self):
         if par['task'] == 'multistim':
@@ -100,6 +136,12 @@ class MultiStimulus:
                 [self.task_dm_dly, 'ctx_dm2_dly'],
                 [self.task_dm_dly, 'multsen_dm_dly']
             ]
+
+        # add separate code for motion-direction tasks for RL
+        elif par['task'] == 'selfexp':
+            self.task_types = [
+                [self.task_selfexp]
+            ]
         else:
             raise Exception('Multistimulus task type \'{}\' not yet implemented.'.format(par['task']))
 
@@ -108,6 +150,7 @@ class MultiStimulus:
 
     def generate_trial(self, current_task):
 
+        par['noise_in'] = 0.05
         self.trial_info = {
             'neural_input'   : np.random.normal(par['input_mean'], par['noise_in'], size=self.input_shape),
             'desired_output' : np.zeros(self.output_shape, dtype=np.float32),
@@ -116,6 +159,8 @@ class MultiStimulus:
 
         self.trial_info['train_mask'][:par['dead_time']//par['dt'], :] = 0
 
+        # if there are any rule-tuned neurons, they must receive some rule signal; 
+        # update this here
         if par['num_rule_tuned'] > 0:
             rule_signal = np.zeros((1,1,par['num_rule_tuned']))
             rule_signal[0,0,current_task] = par['tuning_height']
@@ -153,9 +198,75 @@ class MultiStimulus:
                     self.trial_info['reward_data'][-1,b,-1] = par['correct_choice_reward']
 
         # Returns the task name and trial info
-        return task[1], self.trial_info['neural_input'], self.trial_info['desired_output'], \
-            self.trial_info['train_mask'], self.trial_info['reward_data']
+        return task[1]#, self.trial_info['neural_input'], self.trial_info['desired_output'], \
+            #self.trial_info['train_mask'], self.trial_info['reward_data']
 
+    # assume one trial at a time (e.g. batch size of 1)
+    """def task_selfexp(self, params, cue='pos', rule=90):
+
+         
+        Trials for `self-experimenting' RNN (e.g. a net that selects/constructs the examples
+        upon which it trains).
+
+        Task structure:
+        --------------
+        ITI - 200ms
+        action cue - 200ms
+        sample + response - 400ms
+
+        e.g. trial[0:action_cue_on] -> ITI
+             trial[action_cue_on:stim_on] -> action cue
+             trial[stim_on:] -> stimulus + response
+
+        
+
+        # verify arguments
+        assert len(params) == 4,      f"Params is of length {len(params)}, should be length 4."
+        assert cue in ['pos', 'mot'], f"cue is {cue}; must be in ['pos', 'mot']"
+
+        # set task parameters (time of stimulus onset, etc.)
+        action_cue_on  = self.dead_time // (2 * par['dt'])
+        stim_on = action_cue_on * 2 
+
+        # unpack params, use to create stimulus tuning (depending on rule);
+        # locs carries the location of the moving stimulus, updated through
+        # time; stim_input carries what the input neurons receive, which
+        # reflects that motion through space + time
+        angle = np.angle(params[2] + 1j * params[3])
+        locs = np.repeat(params[:, np.newaxis], len(stim_on:num_time_steps))
+        locs = np.hstack((locs, 0:locs.shape[0]))
+        locs = np.apply_along_axis(
+                    lambda a: 
+                        np.array([a[0] + (a[2] * a[-1]), 
+                                  a[1] + (a[3] * a[-1]),
+                                  angle]) 
+               )
+        stim_input = self.pos_dir_tuning(locs)
+
+        # use cue to set up input during action_cue_on phase
+        cue_input = 0/0 ## WRITE THIS!
+        self.trial_info['train_mask'] = np.ones(mask_shape)
+
+        # use rule and cue to compute response
+        if cue == 'pos':
+            resp = 0/0 # FIGURE OUT HOW TO COMPUTE RESPONSE
+
+        # set up actual trial
+        for b in par['batch_size']:
+
+            # set input
+            self.trial_info['neural_input'][0:action_cue_on      , b, :] = 0
+            self.trial_info['neural_input'][action_cue_on:stim_on, b, :] = cue_input
+            self.trial_info['neural_input'][stim_on:             , b, :] = stim_input
+
+            # set response
+            self.trial_info['desired_output'][:, b, :] = resp
+            
+            # set mask
+            self.train_mask['train_mask'][:action_cue_on] = 0
+
+
+        return self.trial_info"""
 
     def task_go(self, variant='go', offset=0):
 
@@ -398,12 +509,18 @@ class MultiStimulus:
             match = np.random.choice(np.array([True, False]), par['batch_size'])
             stim2 = np.where(match, stim1, nonmatch)
 
+
         elif variant in ['dmc', 'dnmc']:
+
+            # for each batch, specify what direction the first and second sample move in 
             stim1 = np.random.choice(self.motion_dirs, par['batch_size'])
             stim2 = np.random.choice(self.motion_dirs, par['batch_size'])
 
+            # determine category of stimulus from direction
             stim1_cat = np.logical_and(np.less(-1e-3, stim1), np.less(stim1, np.pi))
             stim2_cat = np.logical_and(np.less(-1e-3, stim2), np.less(stim2, np.pi))
+
+            # compute whether stimulus 1 and 2 belong to the same category
             match = np.logical_not(np.logical_xor(stim1_cat, stim2_cat))
         else:
             raise Exception('Bad variant.')
@@ -412,10 +529,11 @@ class MultiStimulus:
         stimulus1 = self.circ_tuning(stim1)
         stimulus2 = self.circ_tuning(stim2)
 
-        # Convert to response
+        # Convert to integer (e.g. indef of motion specified)
         stim1_int = np.round(par['num_motion_dirs']*stim1/(2*np.pi))
         stim2_int = np.round(par['num_motion_dirs']*stim2/(2*np.pi))
 
+        # should an affirmative response be given?
         if variant in ['dms', 'dmc']:
             resp = np.where(match, stim1_int, -1)
         elif variant in ['dnms', 'dnmc']:
@@ -424,6 +542,8 @@ class MultiStimulus:
             raise Exception('Bad variant.')
 
         # Setting up arrays
+
+        # modality choice: determining neurons' RF values
         modality_choice = np.random.choice(np.array([0,1], dtype=np.int16), [2, par['batch_size']])
         modalities = np.zeros([2, par['num_time_steps'], par['batch_size'], par['num_motion_tuned']//2])
         fixation = np.zeros(self.fixation_shape)
@@ -433,10 +553,16 @@ class MultiStimulus:
         mask[:par['dead_time']//par['dt'],:] = 0
 
         # Decide timings and build each trial
+
+        # sample stimulus: start + end of presentation
         stim1_on  = self.fix_time//par['dt']
         stim1_off = (self.fix_time+300)//par['dt']
+
+        # test stimulus: start + end of presentation; variable wait time
         stim2_on  = stim1_off + np.random.choice(self.match_delay, par['batch_size'])
         stim2_off = stim2_on + 300//par['dt']
+
+        # response period begins as test presentation ends
         resp_time = stim2_off
         resp_fix  = np.copy(fixation[:,:,0:1])
 
@@ -457,6 +583,13 @@ class MultiStimulus:
         # Merge activies and fixations into single vectors)
         stimulus = np.concatenate([modalities[0], modalities[1], fixation], axis=2)
         response = np.concatenate([response, resp_fix], axis=2)
+        print(modalities[0].shape)
+        print(modalities[1].shape)
+        print(stimulus1.shape)
+        print(modality_choice.shape)
+        print(self.pref_motion_dirs)
+        print(modality_choice[0,:])
+        print(0/0)
 
         self.trial_info['neural_input'][:,:,:par['num_motion_tuned']+par['num_fix_tuned']] += stimulus
         self.trial_info['desired_output'] = response
@@ -465,15 +598,18 @@ class MultiStimulus:
         return self.trial_info
 
 ### EXAMPLE USAGE ###
-"""
+"""import matplotlib.pyplot as plt
+
 st = MultiStimulus()
 for i in range(len(st.task_types)):
+    if st.task_types[i][1:][0] != "dmc":
+        continue
     print(i, st.task_types[i][1:])
-    t, trial_info = st.generate_trial(i)
+    t = st.generate_trial(i)
 
-    s = trial_info['neural_input']
-    r = trial_info['desired_output']
-    m = trial_info['train_mask']
+    s = st.trial_info['neural_input']
+    r = st.trial_info['desired_output']
+    m = st.trial_info['train_mask']
 
     print(t)
     print(s.shape)
@@ -488,4 +624,6 @@ for i in range(len(st.task_types)):
 
     plt.show()
 quit()
-"""
+#"""
+
+

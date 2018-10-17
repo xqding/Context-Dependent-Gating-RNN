@@ -10,6 +10,7 @@ from itertools import product
 # Model modules
 from parameters import *
 import stimulus
+import dyn_stimulus
 import AdamOpt
 
 # Match GPU IDs to nvidia-smi command
@@ -23,19 +24,21 @@ class Model:
 
     """ RNN model for supervised and reinforcement learning training """
 
-    def __init__(self, input_data, target_data, mask, gating):
+    def __init__(self, input_data, target_data, mask):#, gating):
+    #def __init__(self):
 
         # Load input activity, target data, training mask, etc.
         self.input_data         = tf.unstack(input_data, axis=0)
         self.target_data        = tf.unstack(target_data, axis=0)
-        self.gating             = tf.reshape(gating, [1,-1])
+        self.gating             = tf.reshape(par['gating'][0], [1, -1])#tf.reshape(gating, [1,-1])
         self.time_mask          = tf.unstack(mask, axis=0)
 
         # Declare all Tensorflow variables
         self.declare_variables()
 
         # Build the Tensorflow graph
-        self.rnn_cell_loop()
+        #self.rnn_cell_loop()
+        self.rnn_self_experiment()
 
         # Train the model
         self.optimize()
@@ -48,10 +51,11 @@ class Model:
         lstm_var_prefixes   = ['Wf', 'Wi', 'Wo', 'Wc', 'Uf', 'Ui', 'Uo', 'Uc', 'bf', 'bi', 'bo', 'bc']
         bio_var_prefixes    = ['W_in', 'b_rnn', 'W_rnn']
         rl_var_prefixes     = ['W_pol_out', 'b_pol_out', 'W_val_out', 'b_val_out']
-        base_var_prefies    = ['W_out', 'b_out']
+        base_var_prefixes    = ['W_out', 'b_out']
+        stim_choice_prefixes = ['W_a', 'b_a']
 
         # Add relevant prefixes to variable declaration
-        prefix_list = base_var_prefies
+        prefix_list = base_var_prefixes
         if par['architecture'] == 'LSTM':
             prefix_list += lstm_var_prefixes
         elif par['architecture'] == 'BIO':
@@ -61,6 +65,10 @@ class Model:
             prefix_list += rl_var_prefixes
         elif par['training_method'] == 'SL':
             pass
+
+        # in case of net that selects its own stimuli dynamically
+        if par['stimulus_choice'] == 'dynamic':
+            prefix_list += stim_choice_prefixes
 
         # Use prefix list to declare required variables and place them in a dict
         self.var_dict = {}
@@ -195,6 +203,114 @@ class Model:
 
 
     def optimize(self):
+        """ Calculate losses and apply corrections to model """
+
+        # Set up optimizer and required constants
+        epsilon = 1e-7
+        adam_optimizer = AdamOpt.AdamOpt(tf.trainable_variables(), learning_rate=par['learning_rate'])
+
+        # Make stabilization records
+        #self.prev_weights = {}
+        #self.big_omega_var = {}
+        #reset_prev_vars_ops = []
+        #aux_losses = []
+
+        # Set up stabilization based on trainable variables
+        """for var in tf.trainable_variables():
+            n = var.op.name
+
+            # Make big omega and prev_weight variables
+            self.big_omega_var[n] = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
+            self.prev_weights[n]  = tf.Variable(tf.zeros(var.get_shape()), trainable=False)
+
+            # Don't stabilize value weights/biases
+            if not 'val' in n:
+                aux_losses.append(par['omega_c'] * \
+                    tf.reduce_sum(self.big_omega_var[n] * tf.square(self.prev_weights[n] - var)))
+
+            # Make a reset function for each prev_weight element
+            reset_prev_vars_ops.append(tf.assign(self.prev_weights[n], var))
+
+        # Auxiliary stabilization loss
+        self.aux_loss = tf.add_n(aux_losses)"""
+
+        # Spiking activity loss (penalty on high activation values in the hidden layer)
+        #self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.stack([mask*time_mask*tf.reduce_mean(h) \
+        #    for (h, mask, time_mask) in zip(self.h, self.mask, self.time_mask)]))
+
+        # Training-specific losses
+        if par['training_method'] == 'SL':
+            RL_loss = tf.constant(0.)
+
+            # Task loss (cross entropy)
+            self.pol_loss = tf.reduce_mean([mask*tf.nn.softmax_cross_entropy_with_logits(logits=y, \
+                labels=target, dim=1) for y, target, mask in zip(self.output, self.target_data, self.time_mask)])
+            sup_loss = self.pol_loss
+
+        elif par['training_method'] == 'RL':
+            sup_loss = tf.constant(0.)
+
+            # Collect information from across time
+            self.time_mask  = tf.reshape(tf.stack(self.time_mask),(par['num_time_steps'], par['batch_size'], 1))
+            self.mask       = tf.stack(self.mask)
+            self.reward     = tf.stack(self.reward)
+            self.action     = tf.stack(self.action)
+            self.pol_out    = tf.stack(self.pol_out)
+
+            # Get the value outputs of the network, and pad the last time step
+            val_out = tf.concat([tf.stack(self.val_out), tf.zeros([1,par['batch_size'],par['n_val']])], axis=0)
+
+            # Determine terminal state of the network
+            terminal_state = tf.cast(tf.logical_not(tf.equal(self.reward, tf.constant(0.))), tf.float32)
+
+            # Compute predicted value and the advantage for plugging into the policy loss
+            pred_val = self.reward + par['discount_rate']*val_out[1:,:,:]*(1-terminal_state)
+            advantage = pred_val - val_out[:-1,:,:]
+
+            # Stop gradients back through action, advantage, and mask
+            action_static    = tf.stop_gradient(self.action)
+            advantage_static = tf.stop_gradient(advantage)
+            mask_static      = tf.stop_gradient(self.mask)
+
+            # Policy loss
+            self.pol_loss = -tf.reduce_mean(advantage_static*mask_static*self.time_mask*action_static*tf.log(epsilon+self.pol_out))
+
+            # Value loss
+            self.val_loss = 0.5*par['val_cost']*tf.reduce_mean(mask_static*self.time_mask*tf.square(val_out[:-1,:,:]-tf.stop_gradient(pred_val)))
+
+            # Entropy loss
+            self.entropy_loss = -par['entropy_cost']*tf.reduce_mean(tf.reduce_sum(mask_static*self.time_mask*self.pol_out*tf.log(epsilon+self.pol_out), axis=1))
+
+            # Collect RL losses
+            RL_loss = self.pol_loss + self.val_loss - self.entropy_loss
+
+        # Collect loss terms and compute gradients
+        total_loss = sup_loss + RL_loss# + self.aux_loss + self.spike_loss
+        self.train_op = adam_optimizer.compute_gradients(total_loss)
+
+        # Stabilize weights
+        if par['stabilization'] == 'pathint':
+            # Zenke method
+            self.pathint_stabilization(adam_optimizer)
+        elif par['stabilization'] == 'EWC':
+            # Kirkpatrick method
+            self.EWC()
+        else:
+            # No stabilization
+            pass
+
+        self.a_vector = self.parameters_from_activity()
+
+        # Make reset operations
+        #self.reset_prev_vars = tf.group(*reset_prev_vars_ops)
+        self.reset_adam_op = adam_optimizer.reset_params()
+        self.reset_weights()
+
+        # Make saturation correction operation
+        self.make_recurrent_weights_positive()
+
+
+    def optimize_old(self):
         """ Calculate losses and apply corrections to model """
 
         # Set up optimizer and required constants
@@ -417,6 +533,96 @@ class Model:
 
         # Make update group
         self.update_big_omega = tf.group(*fisher_ops)
+
+    ########################################################################
+    def loop_thru_trial(self, h, c, syn_x, syn_u, mask):
+
+        # Loop through the neural inputs, indexed in time
+        for rnn_input, target, time_mask in zip(self.input_data, self.target_data, self.time_mask):
+
+            # Compute the state of the hidden layer
+            h, c, syn_x, syn_u = self.recurrent_cell(h, c, syn_x, syn_u, rnn_input)
+
+            # Record hidden state -- again, leaving out syn_x
+            self.h.append(h)
+            #self.syn_x.append(syn_x)
+            #self.syn_u.append(syn_u)
+
+            if par['training_method'] == 'SL':
+                # Compute outputs for loss
+                y = h @ self.var_dict['W_out'] + self.var_dict['b_out']
+
+                # Record supervised outputs
+                self.output.append(y)
+
+            elif par['training_method'] == 'RL':
+                # Compute outputs for action
+                pol_out        = h @ self.var_dict['W_pol_out'] + self.var_dict['b_pol_out']
+                action_index   = tf.multinomial(pol_out, 1)
+                action         = tf.one_hot(tf.squeeze(action_index), par['n_pol'])
+
+                # Compute outputs for loss
+                pol_out        = tf.nn.softmax(pol_out, 1)  # Note softmax for entropy loss
+                val_out        = h @ self.var_dict['W_val_out'] + self.var_dict['b_val_out']
+
+                # Check for trial continuation (ends if previous reward was non-zero)
+                continue_trial = tf.cast(tf.equal(self.reward[-1], 0.), tf.float32)
+                mask          *= continue_trial
+                reward         = tf.reduce_sum(action*target, axis=1, keepdims=True)*mask*tf.reshape(time_mask,[par['batch_size'], 1])
+
+                # Record RL outputs
+                self.pol_out.append(pol_out)
+                self.val_out.append(val_out)
+                self.action.append(action)
+                self.reward.append(reward)
+
+            # Record mask (outside if statement for cross-comptability)
+            self.mask.append(mask)
+
+
+    def rnn_self_experiment(self):
+        """ Initialize parameters and execute loop through
+            time to generate the network outputs 
+            FOR SELF-EXPERIMENTING NET """
+
+        # Specify training method outputs
+        self.output = []
+        self.mask   = []
+        self.mask.append(tf.constant(np.ones((par['batch_size'], 1), dtype = np.float32)))
+        if par['training_method'] == 'RL':
+            self.pol_out = self.output  # For interchangeable use
+            self.val_out = []
+            self.action = []
+            self.reward = []
+            self.reward.append(tf.constant(np.zeros((par['batch_size'], par['n_val']), dtype = np.float32)))
+
+        # Initialize state records -- left out syn_x and syn_u, for the moment
+        self.h      = []
+        #self.syn_x  = []
+        #self.syn_u  = []
+
+        # Initialize network state
+        if par['architecture'] == 'BIO':
+            h = self.gating*tf.constant(par['h_init'])
+            c = tf.constant(par['h_init'])
+        elif par['architecture'] == 'LSTM':
+            h = tf.zeros_like(par['h_init'])
+            c = tf.zeros_like(par['h_init'])
+        syn_x = tf.constant(par['syn_x_init'])
+        syn_u = tf.constant(par['syn_u_init'])
+        mask  = self.mask[0]
+
+        ## TIME LOOP - separated to its own function above for ease of understanding
+        self.loop_thru_trial(h, c, syn_x, syn_u, mask)
+
+        # Reward and mask trimming where necessary
+        self.mask   = self.mask[1:]
+        self.reward = self.reward[1:]
+
+
+    # compute parameters from activity
+    def parameters_from_activity(self):
+        return tf.tanh((self.var_dict['W_a'] @ tf.transpose(self.h[-1])) + self.var_dict['b_a'])
 
 
 def supervised_learning(save_fn='test.pkl', gpu_id=None):
@@ -669,6 +875,208 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
 
     print('\nModel execution complete. (Reinforcement)')
 
+####################################################################################
+
+def choose_batch_cue(n = 1):
+    """
+        Generate choice of which rule will govern task
+        (or set of tasks, if given n > 1). 
+
+        FOR NOW: 
+            0 = 'dir'  cue
+            1 = 'pos'  cue
+            2 = 'both' cue
+
+        Returns:
+            - np.array, shape (n, 1), of items i in 
+                [1, num_possible_cues]
+    """
+
+    # NOTE: for simplicity of testing, constrained to one cue (direction)
+    return np.random.choice(range(0, par['num_possible_cues'] - 2), n)
+
+def choose_rule_values(types):
+    """
+        Choose rule value for trials of specified types. 
+        (Code set up to return many rules, in case we ever need it to run that way.)
+
+        NOTE: Rule generation for position probably deserves further thought.
+    """
+    # argument check, for sanity; we only support three types
+    assert type(types) == int or len(np.unique(types)) <= par['num_possible_cues'], \
+        f"Argument `types` supplied with {len(np.unique(types))} values;" + \
+        f" should have {par['num_possible_cues']}."
+
+    # corner case: if types is an integer (not array), handle 
+    # cue types separately + explicitly
+    if type(types) == int:
+
+        # DIRECTION
+        if types == 0:
+            return np.array([np.random.uniform(0, np.pi),
+                             np.random.choice([-1, 1])], ndmin=2, dtype=np.float32)
+
+        # POSITION
+        elif types == 1:
+            return np.array([np.random.uniform(-3., 3.),
+                             np.random.choice([-1, 1])], ndmin=2, dtype=np.float32)
+
+        # BOTH; THIS SHOULD FAIL, BC NOT WRITTEN YET
+        elif types == 2:
+            return 0/0
+
+        else:
+            Exception(f"Types specified as {types}; must be in {range(num_possible_cues)}.")
+
+    # initialize rule array
+    rules = np.zeros((2, len(types)))
+
+    # decide rules by type; 
+    rules[np.where(types == 0)] = np.array([np.random.uniform(0,  np.pi, len(types == 0)), 
+                                            np.random.choice([-1, 1])], ndmin=2)
+    rules[np.where(types == 1)] = np.array([np.random.uniform(-3., 3., len(types == 1)),
+                                            np.random.choice([-1, 1])], ndmin=2)
+
+    ######################################################################
+    # NOTE: UNCOMMENT THIS AND EDIT WHEN RULE FOR BOTH DIR + POS RULE
+    # DETERMINED
+    ######################################################################
+    # rules[np.where(types == 2)] = 0/0
+    ######################################################################
+
+    return rules
+
+
+def self_choice_learning(save_fn='test.pkl', gpu_id=None):
+    """ Run reinforcement learning training for net that chooses its own stimuli"""
+
+    # Isolate requested GPU
+    if gpu_id is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
+
+    # Reset Tensorflow graph before running anything
+    tf.reset_default_graph()
+
+    # Define all placeholders
+    x, target, mask, pred_val, actual_action, \
+        advantage, mask = generate_placeholders(ret_gating=False)
+
+    # Set up stimulus (edited relative to regular reinforcement learning, above),
+    # and accuracy recording (most of this not really used/emphasized here yet)
+    stim               = dyn_stimulus.DynamicStimulus()
+    accuracy_full      = []
+    accuracy_grid      = np.zeros((par['num_trials_per_sequence'], par['n_train_batches']))
+    full_activity_list = []
+    model_performance  = {'reward'      : [], 
+                          'entropy_loss': [], 
+                          'val_loss'    : [], 
+                          'pol_loss'    : [], 
+                          'spike_loss'  : [], 
+                          'trial'       : [], 
+                          'task'        : []}
+    reward_matrix = np.zeros((par['num_trials_per_sequence'], par['n_train_batches']))
+
+    # Display relevant parameters
+    print_key_info()
+
+    # Start Tensorflow session
+    with tf.Session() as sess:
+
+        # Select CPU or GPU
+        device = '/cpu:0' if gpu_id is None else '/gpu:0'
+        with tf.device(device):
+
+            # Check order against args unpacking in model if editing
+            model = Model(x, target, mask)
+
+        # Initialize variables and start the timer
+        sess.run(tf.global_variables_initializer())
+        t_start = time.time()
+
+        accuracy_iter   = []
+        task_start_time = time.time()
+
+        # loop through sequences of trials
+        for i in range(par['n_train_batches']):
+
+            # choose cue + rule for this batch of trials;
+            cue  = int(choose_batch_cue()[0])
+            rule = choose_rule_values(cue)
+            accs, pol_losses, val_losses, ent_losses = [], [], [], []
+
+            # for debugging
+            print(i)
+
+            # loop through trials per sequence
+            for j in range(par['num_trials_per_sequence']):
+
+                # Generate stimulus data for training based on network 
+                # activity at the moment
+                if j == 0:
+                    params = tf.constant(np.random.normal(0, 1, 4), dtype=np.float32)
+                else:
+                    params = np.squeeze(params)
+                    if (j + 1) % 50 == 0:
+                        print(f"\t{j + 1}")
+
+                # use this so py_func doesn't complain (needs to be run on CPU)
+                with tf.device("/cpu:0"):
+                    name, inp, _, mk, reward_data = tf.py_func(stim.generate_trial, 
+                                                               [params, tf.convert_to_tensor(cue), tf.convert_to_tensor(rule)], 
+                                                               [tf.float32]*5)
+                mk = mk[...,np.newaxis]
+
+                # Put together the feed dictionary
+                feed_dict = { x     : inp.eval(), 
+                              target: reward_data.eval(), 
+                              mask  : mk.eval() }
+
+                # Calculate and apply gradients; note that call is edited to reflect
+                # lack of stabilization, etc. used for XdG tests
+                _, pol_loss, val_loss, ent_loss, h_list, reward_list, params = \
+                    sess.run([model.train_op, 
+                              model.pol_loss, 
+                              model.val_loss,
+                              model.entropy_loss, 
+                              model.h, 
+                              model.reward,
+                              model.a_vector], feed_dict = feed_dict)
+
+                # Record accuracies and losses
+                reward = np.stack(reward_list)
+                pol_losses.append(pol_loss)
+                val_losses.append(val_loss)
+                ent_losses.append(ent_loss)
+
+                # edited relative to above; not sure if this is right 
+                # (if it's not right, it might reflect something more general 
+                # about the way I'm understanding the task structure/setup)
+                #acc    = np.sum(reward>0,axis=0) / np.sum(reward_data.eval())
+                acc = np.mean(np.sum(reward>0,axis=0))
+                accs.append(acc)
+
+
+            accuracy_iter.append(np.mean(np.array(accs)))
+
+            if i > 2000:
+                if np.mean(accuracy_iter[-2000:]) > 0.985 or (i>25000 and np.mean(accuracy_iter[-2000:]) > 0.98):
+                    print('Accuracy reached threshold')
+                    break
+
+            # Display network performance
+            if i % 1 == 0:
+                print('Iter '     , i                            , '\n',
+                      'Task name ', name                         , '\n',
+                      ' accuracy' , np.mean(np.array(accs))      , '\n',
+                      ' pol_loss' , np.mean(np.array(pol_losses)), '\n',
+                      ' val_loss' , np.mean(np.array(val_losses)), '\n',
+                      ' ent_loss' , np.mean(np.array(ent_losses)), '\n',
+                      ' tot_loss' , np.mean(np.array(pol_losses)) + np.mean(np.array(val_losses)) - np.mean(np.array(ent_losses)), '\n',
+                      ' mean h '  , np.mean(np.stack(h_list))    , '\n',
+                      ' time '    , np.around(time.time() - task_start_time))
+                print(np.hstack((np.squeeze(reward)[:,np.newaxis], np.squeeze(reward_data.eval()))))
+
+    print('\nModel execution complete. (Self-experimenting.)')
 
 def print_key_info():
     """ Display requested information """
@@ -727,17 +1135,21 @@ def append_model_performance(model_performance, reward, entropy_loss, pol_loss, 
     return model_performance
 
 
-def generate_placeholders():
+def generate_placeholders(ret_gating=True):
 
-    mask = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], 1])
-    x = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_input']])  # input data
-    target = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_pol']])  # input data
+    mask = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], 1], name='mask')
+    x = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_input']], name='input')  # input data
+    target = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_pol']], name='output')  # input data
     pred_val = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_val'], ])
     actual_action = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_pol']])
     advantage  = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_val']])
-    gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
 
-    return x, target, mask, pred_val, actual_action, advantage, mask, gating
+    if ret_gating:
+        gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
+        return x, target, mask, pred_val, actual_action, advantage, mask, gating
+
+    else:
+        return x, target, mask, pred_val, actual_action, advantage, mask#, gating
 
 
 def main(save_fn='testing', gpu_id=None):
@@ -745,7 +1157,10 @@ def main(save_fn='testing', gpu_id=None):
     # Update all dependencies in parameters
     update_dependencies()
 
-    # Identify learning method and run accordingly
+    # Identify learning method/stimulus selection method 
+    # and run accordingly
+    if par['stimulus_choice'] == 'dynamic':
+        self_choice_learning(save_fn, gpu_id)
     if par['training_method'] == 'SL':
         supervised_learning(save_fn, gpu_id)
     elif par['training_method'] == 'RL':

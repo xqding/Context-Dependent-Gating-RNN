@@ -16,6 +16,19 @@ def try_model(save_fn):
     except KeyboardInterrupt:
         print('Quit by KeyboardInterrupt.')
 
+
+def gen_filename_from_specified_params(params, ext = ".pkl"):
+    """
+        Generate filename from specified dictionary of params.
+
+        Returns:
+            - str
+    """
+    fn = ext
+    for key in params.keys():
+        fn = f"{key}_{params[key]}_{fn}"
+    return fn
+
 ###############################################################################
 ###############################################################################
 ###############################################################################
@@ -34,6 +47,22 @@ for j in range(5):
         try_model(save_fn)
 quit()"""
 
+# Self-experimenting net
+params_to_update = {'omega_c'              : omega_c[2], 
+                   'architecture'          : 'LSTM', 
+                   'training_method'       : 'RL',
+                   'n_train_batches'       : 100, 
+                   'learning_rate'         : 5e-4, 
+                   'val_cost'              : 0.01, 
+                   'entropy_cost'          : 1e-4, 
+                   'omega_xi'              : 0.01,
+                   'task'                  : 'selfexp',
+                   'stimulus_choice'       : 'dynamic',
+                   'multistim_trial_length': 1000}
+update_parameters(params_to_update)
+save_fn = gen_filename_from_specified_params(params_to_update)
+print(f"Running {save_fn}")
+try_model(save_fn)
 
 
 # LSTM - Reinforcement Learning - XdG
