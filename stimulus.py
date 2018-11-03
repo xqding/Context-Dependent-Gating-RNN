@@ -144,7 +144,7 @@ class MultiStimulus:
                 self.trial_info['reward_data'][fix_time,b,:-1] = par['fix_break_penalty']
                 self.trial_info['reward_data'][respond_time,b,correct_response] = par['correct_choice_reward']
                 for i in incorrect_response:
-                    self.trial_info['reward_data'][-1,b,-1] = par['wrong_choice_penalty']
+                    self.trial_info['reward_data'][respond_time,b,i] = par['wrong_choice_penalty']
 
                 # Penalize fixating throughout entire trial if response was required
                 if not self.trial_info['desired_output'][-1,b,-1] == 1:
