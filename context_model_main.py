@@ -37,7 +37,7 @@ accuracy = defaultdict(deque)
 for idx_time in range(1, 100):
     accuracy[idx_time].append(0.0)
     
-for epoch in range(100):
+for epoch in range(500):
     for idx, data in enumerate(dataloader):
         for i in range(len(data[0])):
             idx_time = idx * load_batch_size + i + 1
