@@ -68,7 +68,7 @@ par = {
     'U_std'                 : 0.45,
 
     # Training specs
-    'batch_size'            : 256,
+    'batch_size'            : 12,
     'n_train_batches'       : 5000, #50000,
 
     # Omega parameters
